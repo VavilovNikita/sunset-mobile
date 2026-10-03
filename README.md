@@ -48,3 +48,14 @@ npm run check    # the apps' typecheck shows every place the contract change mat
 `packages/api-client/test/spec-sync.test.ts` fails if `src/schema.ts` isn't exactly what the
 generator produces from the vendored spec, and (when a `sunset` checkout sits next to this repo)
 if the vendored spec has drifted from sunset's.
+
+### Against a real backend
+
+`packages/api-client/smoke/smoke.ts` drives both clients through a whole order (first item → send →
+cash close), the table-QR session until the server ends it, and the public quote. It writes data,
+so it refuses anything but a local/private host and needs `SMOKE_ALLOW_WRITES=1`:
+
+```bash
+SMOKE_API_BASE_URL=http://127.0.0.1:8080/api SMOKE_EMAIL=… SMOKE_PASSWORD=… SMOKE_ALLOW_WRITES=1 \
+  npm run smoke --workspace @sunset/api-client
+```
