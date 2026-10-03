@@ -9,6 +9,7 @@
     "generate:api": "npm run generate --workspace @sunset/api-client",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "check": "npm run typecheck && npm run test"
+    "check": "npm run typecheck && npm run test",
+    "verify": "bash scripts/verify.sh"
   }
 }
