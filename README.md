@@ -14,18 +14,36 @@ primitives and the palette).
 
 ## Running
 
+You need Node 20+, Docker (Docker Desktop is fine), Java 21, and a checkout of `sunset` next to
+this one (`../sunset`, or set `SUNSET_DIR`). Then, from the repo root:
+
 ```bash
-npm install                     # once, at the repo root (npm workspaces)
-cp apps/staff/.env.example apps/staff/.env   # set EXPO_PUBLIC_API_BASE_URL to a LOCAL/STAGING backend
-cp apps/guest/.env.example apps/guest/.env
-cd apps/staff && npx expo start  # or apps/guest
+npm install            # once
+npm run dev:backend    # terminal 1: local database + backend + demo data, prints the logins
+npm run staff          # terminal 2: the staff app - scan the QR code with the phone
+npm run guest          #   ...or the guest app
 ```
 
-The apps use native modules outside Expo Go's set only through Expo's own packages, but camera,
-secure storage and the image picker should still be tried in a development build on a real
-device (`npx expo run:android|ios`, or an EAS development build).
+- **`dev:backend`** starts Postgres in Docker (`sunset-dev-db`, port 5435, localhost only), builds
+  and runs the sunset backend on `:8080`, and on first run adds demo data: one account per role
+  (`admin@`, `manager@`, `cashier@`, `waiter@`, plus `engineer@` and `therapist@` - all
+  `@demo.local`, password `demo-pass-123`), tables, a menu, spa tables and treatments, a villa
+  with three rooms, a spa booking today, and a checked-in guest with an app account
+  (`guest@demo.local`, same password). `--reset` wipes the demo database, `--rebuild` rebuilds
+  the backend after you pull sunset. It never touches production.
+- **`staff` / `guest`** fill in the API address for you (this computer's Wi-Fi address, port 8080)
+  and start Expo. The phone needs Expo Go, or a development build, on the same Wi-Fi. If the
+  network blocks phone-to-computer traffic, add `-- --tunnel`. A value in `apps/<app>/.env`
+  always wins over the automatic one (see `.env.example`).
+- **`staff:web` / `guest:web`** open the app in this computer's browser instead - quickest way to
+  look around. It's a preview, not a target: sign-in lives in memory only (a reload signs you
+  out), and camera/photos need a phone.
 
-**Never point a development build at production.** There is no default API URL on purpose.
+Camera, secure storage and the image picker should be tried on a real device (Expo Go, or
+`npx expo run:android|ios` / an EAS development build).
+
+**Never point a development build at production.** There is no default API URL on purpose, and
+`npm run staff|guest` refuses `sunsetsamui.com`.
 
 ## Checks
 

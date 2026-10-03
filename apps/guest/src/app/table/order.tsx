@@ -24,7 +24,6 @@ export default function TableOrder() {
   if (qr === null) {
     return (
       <Screen>
-        <Title>Order at your table</Title>
         <Body muted>Scan the QR code on your table to see your order and add to it.</Body>
         <Button title="Scan the table's code" onPress={() => router.push("/table/scan")} />
       </Screen>

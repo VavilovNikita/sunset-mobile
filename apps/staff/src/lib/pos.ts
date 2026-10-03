@@ -67,3 +67,12 @@ export function tableStateLabel(table: Pick<MapTable, "openOrderIds" | "isActive
 export function floorTables(tables: MapTable[]): MapTable[] {
   return tables.filter((t) => t.zone !== "SPA" && (t.isActive || t.openOrderIds.length > 0));
 }
+
+/**
+ * Open orders with no table - room service a guest sent from the guest app, and anything started
+ * with "New order without a table". The table list can't reach these, so the floor lists them on
+ * their own (same as the web /pos "No table" tab). Oldest first: that's the one waiting longest.
+ */
+export function tablelessOpenOrders<T extends Pick<Order, "tableId" | "status" | "createdAt">>(orders: T[]): T[] {
+  return orders.filter((o) => !o.tableId && isOpenForItems(o)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}

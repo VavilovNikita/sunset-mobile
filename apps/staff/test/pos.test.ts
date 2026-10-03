@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canEditLine, canVoidLine, isChargeableBooking, menuForOrder, orderLabel, validateVoidReason } from "../src/lib/pos";
+import { canEditLine, canVoidLine, isChargeableBooking, menuForOrder, orderLabel, tablelessOpenOrders, validateVoidReason } from "../src/lib/pos";
 import { mergePrintJobLists, notPrintedBannerText, printerHealth, summarizeNotPrinted } from "../src/lib/printQueue";
 
 const item = (id: string, department: "KITCHEN" | "BAR" | "SPA", isAvailable = true) =>
@@ -73,5 +73,19 @@ describe("tapping a table", () => {
   });
   it("leaves spa tables off the restaurant floor", () => {
     expect(floorTables([t([], true, "SPA"), t([], true, "BAR"), t([], false, "BAR"), t(["o"], false, "BAR")])).toHaveLength(2);
+  });
+});
+
+describe("tablelessOpenOrders", () => {
+  const o = (id: string, tableId: string | null, status: "OPEN" | "SENT" | "PAID" | "CANCELLED", createdAt: string) => ({ id, tableId, status, createdAt });
+  it("keeps only open orders with no table, oldest first", () => {
+    const orders = [
+      o("late", null, "SENT", "2026-10-04T10:05:00Z"),
+      o("table", "t1", "OPEN", "2026-10-04T09:00:00Z"),
+      o("paid", null, "PAID", "2026-10-04T08:00:00Z"),
+      o("cancelled", null, "CANCELLED", "2026-10-04T08:00:00Z"),
+      o("early", null, "OPEN", "2026-10-04T09:30:00Z"),
+    ];
+    expect(tablelessOpenOrders(orders).map((x) => x.id)).toEqual(["early", "late"]);
   });
 });

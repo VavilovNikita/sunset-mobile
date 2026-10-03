@@ -62,8 +62,8 @@ export function MenuCart({ menu, busy, onSend, sendLabel }: { menu: MenuItem[]; 
 function Step({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) {
   return (
     <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label === "+" ? "Add one" : "Remove one"}
+      role="button"
+      aria-label={label === "+" ? "Add one" : "Remove one"}
       disabled={disabled}
       onPress={onPress}
       style={{ width: 48, height: 40, borderRadius: 20, borderWidth: 1, borderColor: colors.creamFaint, alignItems: "center", justifyContent: "center", opacity: disabled ? 0.4 : 1 }}

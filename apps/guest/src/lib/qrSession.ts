@@ -1,4 +1,4 @@
-import * as SecureStore from "expo-secure-store";
+import * as SecureStore from "./secureStore";
 import type { OrderQr } from "./orderQr";
 
 // The scanned table's code is a bearer credential for adding to that order, so it lives in secure

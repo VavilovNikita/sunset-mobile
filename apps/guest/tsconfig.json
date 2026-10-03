@@ -4,5 +4,9 @@
     "strict": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src", "test", "*.ts", "expo-env.d.ts"]
+  "include": [
+    "src",
+    "test",
+    "*.ts"
+  ]
 }

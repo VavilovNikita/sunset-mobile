@@ -58,7 +58,7 @@ function NewTaskBody() {
       <Field label="What's wrong?" value={description} onChangeText={setDescription} multiline maxLength={1000} style={{ minHeight: 96 }} />
       <Row style={{ flexWrap: "wrap" }}>
         {photos.map((p, i) => (
-          <Pressable key={p.uri} accessibilityLabel="Remove photo" onPress={() => setPhotos((list) => list.filter((_, j) => j !== i))}>
+          <Pressable key={p.uri} aria-label="Remove photo" onPress={() => setPhotos((list) => list.filter((_, j) => j !== i))}>
             <Image source={{ uri: p.uri }} style={{ width: 72, height: 72, borderRadius: 8 }} />
           </Pressable>
         ))}

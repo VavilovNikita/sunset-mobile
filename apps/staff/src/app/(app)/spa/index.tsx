@@ -62,8 +62,8 @@ function SpaBody() {
                   return (
                     <Pressable
                       key={t.id}
-                      accessibilityRole="button"
-                      accessibilityLabel={appt ? `${appt.guestName} at ${formatClock(appt.startTime)} on ${t.label}` : `Book ${t.label} at ${slot}`}
+                      role="button"
+                      aria-label={appt ? `${appt.guestName} at ${formatClock(appt.startTime)} on ${t.label}` : `Book ${t.label} at ${slot}`}
                       onPress={() =>
                         appt ? setSelected(appt) : router.push({ pathname: "/spa/book", params: { date, tableId: t.id, startTime: slot } })
                       }

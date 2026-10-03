@@ -25,7 +25,7 @@ function AccountBody() {
   return (
     <Screen>
       <Title>{account?.name ?? account?.email}</Title>
-      <Label>{account?.email}</Label>
+      {account?.name ? <Body muted>{account.email}</Body> : null}
       <ErrorText>{bookings.error}</ErrorText>
       {bookings.loading && !bookings.data ? <Loading /> : null}
       {bookings.data?.length === 0 ? <Body muted>No bookings yet.</Body> : null}

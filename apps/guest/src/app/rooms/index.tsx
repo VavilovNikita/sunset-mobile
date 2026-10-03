@@ -18,7 +18,7 @@ export default function Rooms() {
         const image = roomImageUrl(room.images[0]);
         return (
           <Card key={room.id} onPress={() => router.push(`/rooms/${room.id}`)}>
-            {image ? <Image source={{ uri: image }} style={{ width: "100%", height: 160, borderRadius: 8 }} accessibilityLabel={room.name} /> : null}
+            {image ? <Image source={{ uri: image }} style={{ width: "100%", height: 160, borderRadius: 8 }} aria-label={room.name} /> : null}
             <Body>{room.name}</Body>
             {/* The listed base rate as the server stores it - the price for real dates comes from the quote. */}
             <Body muted>{`From ${formatBaht(room.basePrice)} a night · sleeps ${room.capacity}`}</Body>

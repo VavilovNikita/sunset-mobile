@@ -1,0 +1,19 @@
+{
+  "name": "@sunset/dev-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local development helpers: a throwaway backend with demo data, and app launchers. Never touches production.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@sunset/api-client": "*",
+    "bcryptjs": "^3.0.2",
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "~6.0.3"
+  }
+}

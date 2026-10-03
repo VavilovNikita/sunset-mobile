@@ -3,7 +3,7 @@ import { Modal, Pressable, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { call, type ApiResult } from "@sunset/api-client";
 import type { Schemas } from "@sunset/api-client/staff";
-import { cashChange, formatBaht, formatTimestamp, hotelDateKey } from "@sunset/core";
+import { cashChange, formatBaht, formatDate, formatTimestamp, hotelDateKey } from "@sunset/core";
 import { Badge, Body, Button, Card, Choice, ErrorText, Field, Label, Loading, Row, Screen, Title, colors } from "@sunset/ui";
 import { RequireCapability } from "../../../../components/Guard";
 import { confirmAsActor } from "../../../../components/ActorConfirm";
@@ -65,8 +65,8 @@ function OrderBody() {
 
   return (
     <Screen>
-      <Title>{table ? `Table ${table.label}` : "No table"}</Title>
-      {order.data ? <Label>{`${orderLabel(order.data)} · ${order.data.status}`}</Label> : <Body muted>The order starts when you add the first item.</Body>}
+      <Title>{table ? `Table ${table.label}` : order.data?.guestName ? `No table · ${order.data.guestName}` : "No table"}</Title>
+      {order.data ? <Body muted>{`${orderLabel(order.data)} · ${order.data.status}`}</Body> : <Body muted>The order starts when you add the first item.</Body>}
       <ErrorText>{order.error}</ErrorText>
       {order.data ? <Ticket order={order.data} names={names} onChange={order.apply} /> : null}
       {order.data === null || isOpenForItems(order.data) ? (
@@ -163,7 +163,7 @@ function Ticket({ order, names, onChange }: { order: Order; names: Map<string, s
 function Small({ title, onPress, disabled }: { title: string; onPress: () => void; disabled?: boolean }) {
   return (
     <Pressable
-      accessibilityRole="button"
+      role="button"
       disabled={disabled}
       onPress={onPress}
       hitSlop={6}
@@ -234,8 +234,8 @@ function MenuPicker({ menu, error, onAdd }: { menu: MenuItem[]; error: string | 
       {shown.map((item) => (
         <Pressable
           key={item.id}
-          accessibilityRole="button"
-          accessibilityLabel={`Add ${item.name}`}
+          role="button"
+          aria-label={`Add ${item.name}`}
           disabled={action.busy}
           onPress={() => void action.run(() => onAdd(item))}
           style={{ minHeight: 48, flexDirection: "row", justifyContent: "space-between", alignItems: "center", opacity: action.busy ? 0.5 : 1 }}
@@ -333,6 +333,18 @@ function Payment({ order, onChange }: { order: Order; onChange: (o: Order) => vo
   const search = useAction();
   const [results, setResults] = useState<Schemas["Booking"][] | null>(null);
   const change = cashChange(order.total, received);
+  // Room service (and a spa bill opened from an appointment) already names the guest's booking:
+  // offer it straight away instead of making the cashier search for someone the order knows.
+  const linked = useLoad(
+    async () =>
+      order.bookingId
+        ? nullOn404(await call(api.GET("/bookings/{id}", { params: { path: { id: order.bookingId } } }), "Could not load the guest's booking."))
+        : { ok: true as const, data: null, status: 200 },
+    [api, order.bookingId],
+  );
+  const linkedBooking = linked.data && isChargeableBooking(linked.data) ? linked.data : null;
+  const shownResults = results ?? (linkedBooking ? [linkedBooking] : null);
+  const chosen = booking ?? (results === null ? linkedBooking : null);
 
   if (shift.loading && shift.data === null && !shift.error) return <Loading label="Checking your shift…" />;
   if (shift.error) return <ErrorText>{shift.error}</ErrorText>;
@@ -401,18 +413,18 @@ function Payment({ order, onChange }: { order: Order; onChange: (o: Order) => vo
             }}
           />
           <ErrorText>{search.error}</ErrorText>
-          {results?.length === 0 ? <Body muted>No confirmed or paid booking in house today matches.</Body> : null}
-          {results?.map((b) => (
-            <Card key={b.id} onPress={() => setBooking(b)} accent={booking?.id === b.id ? colors.sea : undefined}>
+          {shownResults?.length === 0 ? <Body muted>No confirmed or paid booking in house today matches.</Body> : null}
+          {shownResults?.map((b) => (
+            <Card key={b.id} onPress={() => setBooking(b)} accent={chosen?.id === b.id ? colors.sea : undefined}>
               <Body>{b.guestName}</Body>
-              <Body muted>{`${b.roomUnit?.label ?? b.room.name} · ${b.checkIn} → ${b.checkOut}`}</Body>
+              <Body muted>{`${b.roomUnit?.label ?? b.room.name} · ${formatDate(b.checkIn)} → ${formatDate(b.checkOut)}`}</Body>
             </Card>
           ))}
           <Button
             title="Charge to room"
-            disabled={!booking || order.items.length === 0}
+            disabled={!chosen || order.items.length === 0}
             busy={close.busy}
-            onPress={() => booking && closeWith({ method: "ROOM_CHARGE", bookingId: booking.id }, `Charge to ${booking.guestName}'s room`)}
+            onPress={() => chosen && closeWith({ method: "ROOM_CHARGE", bookingId: chosen.id }, `Charge to ${chosen.guestName}'s room`)}
           />
         </>
       ) : null}

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppState, View } from "react-native";
-import * as SecureStore from "expo-secure-store";
+import * as SecureStore from "./secureStore";
 import { call, type ApiResult } from "@sunset/api-client";
 import { createStaffClient, type StaffClient } from "@sunset/api-client/staff";
 import { API_BASE_URL, IDLE_LIMIT_MS } from "./config";

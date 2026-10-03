@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
-import { Alert, Image, Pressable, Text, View, useWindowDimensions } from "react-native";
+import { Image, Pressable, Text, View, useWindowDimensions } from "react-native";
 import { router } from "expo-router";
 import { call } from "@sunset/api-client";
 import type { Schemas } from "@sunset/api-client/staff";
-import { Body, Button, Card, Choice, ErrorText, Label, Loading, Screen, colors } from "@sunset/ui";
+import { formatBaht } from "@sunset/core";
+import { Body, Button, Card, Choice, ErrorText, Label, Loading, Row, Screen, colors } from "@sunset/ui";
 import { RequireCapability } from "../../../components/Guard";
 import { NotPrintedBanner } from "../../../components/NotPrintedBanner";
 import { useLoad } from "../../../lib/hooks";
-import { floorTables, tableAction, tableStateLabel } from "../../../lib/pos";
+import { floorTables, orderLabel, tableAction, tablelessOpenOrders, tableStateLabel } from "../../../lib/pos";
 import { useSession, useSignedIn } from "../../../lib/session";
 import { API_BASE_URL } from "../../../lib/config";
+import { ask } from "../../../lib/ask";
 
 type MapTable = Schemas["RestaurantMapTable"];
 
@@ -18,7 +20,7 @@ function openTable(table: MapTable) {
   if (action.kind === "open") router.push(`/pos/order/${action.orderId}`);
   else if (action.kind === "start") router.push({ pathname: "/pos/order/[id]", params: { id: "new", tableId: table.tableId } });
   else if (action.kind === "pick") {
-    Alert.alert(table.label, "This table has more than one open order.", [
+    ask(table.label, "This table has more than one open order.", [
       ...action.orderIds.map((id, i) => ({ text: `Order ${i + 1} (${id.slice(0, 8)})`, onPress: () => router.push(`/pos/order/${id}`) })),
       { text: "Cancel", style: "cancel" as const },
     ]);
@@ -59,12 +61,47 @@ function FloorBody() {
         />
       ) : null}
       {view === "map" && canMap && map.data ? <FloorPlan imageUpdatedAt={map.data.imageUpdatedAt} tables={positioned} /> : <TableList tables={tables} />}
+      <TablelessOrders />
       <Button
         title="New order without a table"
         variant="secondary"
         onPress={() => router.push({ pathname: "/pos/order/[id]", params: { id: "new" } })}
       />
     </Screen>
+  );
+}
+
+/** Room service and other no-table orders - secondary to the floor, so its failure stays here. */
+function TablelessOrders() {
+  const { api } = useSignedIn();
+  const orders = useLoad(
+    async () => {
+      const [open, sent] = await Promise.all([
+        call(api.GET("/orders", { params: { query: { status: "OPEN" } } }), "Could not load orders without a table."),
+        call(api.GET("/orders", { params: { query: { status: "SENT" } } }), "Could not load orders without a table."),
+      ]);
+      if (!open.ok) return open;
+      if (!sent.ok) return sent;
+      return { ...open, data: tablelessOpenOrders([...open.data, ...sent.data]) };
+    },
+    [api],
+    { pollMs: 10_000 },
+  );
+  if (orders.error) return <ErrorText>{orders.error}</ErrorText>;
+  if (!orders.data || orders.data.length === 0) return null;
+  return (
+    <View style={{ gap: 8 }}>
+      <Label>{`No table (${orders.data.length})`}</Label>
+      {orders.data.map((o) => (
+        <Card key={o.id} onPress={() => router.push(`/pos/order/${o.id}`)} accent={o.status === "SENT" ? colors.slate : colors.amber}>
+          <Row style={{ justifyContent: "space-between" }}>
+            <Body style={{ flex: 1 }}>{o.guestName ? `${orderLabel(o)} · ${o.guestName}` : orderLabel(o)}</Body>
+            <Body>{formatBaht(o.total)}</Body>
+          </Row>
+          <Body muted>{o.bookingId ? `Linked to a stay · ${o.status.toLowerCase()}` : o.status.toLowerCase()}</Body>
+        </Card>
+      ))}
+    </View>
   );
 }
 
@@ -82,8 +119,8 @@ function TableList({ tables }: { tables: MapTable[] }) {
               .map((t) => (
                 <Pressable
                   key={t.tableId}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${t.label}, ${tableStateLabel(t)}`}
+                  role="button"
+                  aria-label={`${t.label}, ${tableStateLabel(t)}`}
                   onPress={() => openTable(t)}
                   style={{ width: 104, minHeight: 72, borderRadius: 12, padding: 10, backgroundColor: fill(t), opacity: t.isActive ? 1 : 0.5 }}
                 >
@@ -116,8 +153,8 @@ function FloorPlan({ tables, imageUpdatedAt }: { tables: MapTable[]; imageUpdate
         {tables.map((t) => (
           <Pressable
             key={t.tableId}
-            accessibilityRole="button"
-            accessibilityLabel={`${t.label}, ${tableStateLabel(t)}`}
+            role="button"
+            aria-label={`${t.label}, ${tableStateLabel(t)}`}
             onPress={() => openTable(t)}
             hitSlop={8}
             style={{

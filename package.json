@@ -3,13 +3,22 @@
   "private": true,
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "tools/*"
   ],
   "scripts": {
     "generate:api": "npm run generate --workspace @sunset/api-client",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "check": "npm run typecheck && npm run test",
-    "verify": "bash scripts/verify.sh"
+    "verify": "bash scripts/verify.sh",
+    "dev:backend": "tsx tools/dev/backend.ts",
+    "staff": "tsx tools/dev/start-app.ts staff",
+    "guest": "tsx tools/dev/start-app.ts guest",
+    "staff:web": "tsx tools/dev/start-app.ts staff --web",
+    "guest:web": "tsx tools/dev/start-app.ts guest --web"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0"
   }
 }

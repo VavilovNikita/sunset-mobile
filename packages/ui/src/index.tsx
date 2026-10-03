@@ -49,7 +49,7 @@ export function Card({ children, style, onPress, accent }: { children: ReactNode
   const content = <View style={[styles.card, accent ? { borderLeftColor: accent, borderLeftWidth: 4 } : null, style]}>{children}</View>;
   if (!onPress) return content;
   return (
-    <Pressable onPress={onPress} accessibilityRole="button" style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}>
+    <Pressable onPress={onPress} role="button" style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}>
       {content}
     </Pressable>
   );
@@ -72,7 +72,7 @@ export function Button({ title, onPress, disabled, busy, variant = "primary" }: 
   const inactive = disabled || busy;
   return (
     <Pressable
-      accessibilityRole="button"
+      role="button"
       accessibilityState={{ disabled: !!inactive, busy: !!busy }}
       disabled={inactive}
       onPress={onPress}
@@ -94,7 +94,7 @@ export function Field({ label, ...props }: TextInputProps & { label: string }) {
   return (
     <View style={{ gap: space.xs }}>
       <Label>{label}</Label>
-      <TextInput placeholderTextColor={colors.creamMuted} style={styles.input} {...props} />
+      <TextInput aria-label={label} placeholderTextColor={colors.creamMuted} style={styles.input} {...props} />
     </View>
   );
 }

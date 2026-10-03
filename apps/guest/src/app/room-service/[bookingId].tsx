@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useLocalSearchParams } from "expo-router";
 import { call } from "@sunset/api-client";
 import type { Schemas } from "@sunset/api-client/guest";
-import { Body, ErrorText, Loading, Screen, Title } from "@sunset/ui";
+import { Body, ErrorText, Loading, Screen } from "@sunset/ui";
 import { MenuCart, OrderSummary } from "../../components/MenuCart";
 import { useAction, useLoad } from "../../lib/hooks";
 import { useApi } from "../../lib/session";
@@ -21,7 +21,6 @@ export default function RoomService() {
 
   return (
     <Screen>
-      <Title>Room service</Title>
       {order ? <OrderSummary order={order} /> : null}
       {order ? <Body muted>Your order has gone to the kitchen/bar and will be charged to your room. Add more below.</Body> : null}
       {closed ? <ErrorText>Room service isn't available for this booking right now - it's only for guests who are checked in.</ErrorText> : null}

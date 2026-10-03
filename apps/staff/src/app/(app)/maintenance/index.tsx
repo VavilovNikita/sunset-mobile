@@ -10,7 +10,7 @@ import { API_BASE_URL } from "../../../lib/config";
 import { useAction, useLoad } from "../../../lib/hooks";
 import { useSession, useSignedIn } from "../../../lib/session";
 import { useState } from "react";
-import { Alert } from "react-native";
+import { ask } from "../../../lib/ask";
 
 type Task = Schemas["MaintenanceTask"];
 
@@ -67,7 +67,7 @@ function MaintenanceBody() {
                 busy={changing === task.id}
                 disabled={change.busy}
                 onPress={() =>
-                  Alert.alert("Mark done", `${task.description} in ${task.unitLabel}?`, [
+                  ask("Mark done", `${task.description} in ${task.unitLabel}?`, [
                     { text: "Cancel", style: "cancel" },
                     { text: "Done", onPress: () => void setStatus(task, "DONE") },
                   ])
@@ -88,7 +88,7 @@ function Photos({ paths }: { paths: string[] }) {
     <ScrollView horizontal contentContainerStyle={{ gap: 8 }}>
       {paths.map((path) => (
         <View key={path} style={{ width: 96, height: 96, borderRadius: 8, overflow: "hidden", backgroundColor: colors.ink3 }}>
-          <Image source={{ uri: `${API_BASE_URL}${path}`, headers: authHeaders() }} style={{ width: 96, height: 96 }} accessibilityLabel="Task photo" />
+          <Image source={{ uri: `${API_BASE_URL}${path}`, headers: authHeaders() }} style={{ width: 96, height: 96 }} aria-label="Task photo" />
         </View>
       ))}
     </ScrollView>

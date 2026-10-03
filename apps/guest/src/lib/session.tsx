@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import * as SecureStore from "expo-secure-store";
+import * as SecureStore from "./secureStore";
 import { call, type ApiResult } from "@sunset/api-client";
 import { createGuestClient, type GuestClient, type Schemas } from "@sunset/api-client/guest";
 import { API_BASE_URL } from "./config";

@@ -73,6 +73,8 @@ function AttendanceToday() {
     <Card>
       <Label>On shift today</Label>
       <ErrorText>{today.error}</ErrorText>
+      {today.loading && !today.data ? <Loading /> : null}
+      {today.data?.length === 0 ? <Body muted>Nobody is rostered today.</Body> : null}
       {(today.data ?? []).map((row) => (
         <Row key={row.employeeUserId} style={{ justifyContent: "space-between" }}>
           <Body style={{ flex: 1 }}>{row.employeeName}</Body>
