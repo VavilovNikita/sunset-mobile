@@ -13,7 +13,7 @@ describe("generated types match the spec", () => {
     // Hand-edited or stale generated types are how the web client's hand-mirrored types drifted
     // from the spec (audit finding M7). Regenerate and compare byte for byte.
     const out = join(mkdtempSync(join(tmpdir(), "api-client-")), "schema.ts");
-    execFileSync(process.execPath, [join(require.resolve("openapi-typescript"), "../../bin/cli.js"), "openapi.yaml", "-o", out], {
+    execFileSync(process.execPath, [join(require.resolve("openapi-typescript"), "../../bin/cli.js"), "openapi.yaml", "-o", out, "--default-non-nullable", "false"], {
       cwd: pkg,
       stdio: "pipe",
     });

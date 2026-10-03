@@ -4136,11 +4136,11 @@ export interface components {
             department: components["schemas"]["PrinterDepartment"];
             host: string;
             /** @default 9100 */
-            port: number;
+            port?: number;
             /** @default PC437 */
-            codepage: components["schemas"]["PrinterCodepage"];
+            codepage?: components["schemas"]["PrinterCodepage"];
             /** @default true */
-            isActive: boolean;
+            isActive?: boolean;
         };
         /** @description A queued/attempted print. `payload` (the raw ESC/POS bytes actually sent) is intentionally not exposed here - it's binary and only meaningful to a printer. Dismissing a job (`POST /print-jobs/dismiss`) never deletes it or changes `status` - a dismissed job is still `FAILED`, just marked as not needing further attention. See `dismissedAt`. */
         PrintJob: {
@@ -4323,7 +4323,7 @@ export interface components {
             roomId: string;
             label: string;
             /** @default true */
-            isActive: boolean;
+            isActive?: boolean;
         };
         /** @description Body of `PATCH /room-units/{id}`. Full replacement of `label`/`isActive` — `roomId` is immutable after creation. */
         RoomUnitUpdateInput: {
@@ -4646,7 +4646,7 @@ export interface components {
              * @description Number of children in the party. Optional, defaults to 0.
              * @default 0
              */
-            children: number;
+            children?: number;
             /** @description An existing `Guest` card picked at the counter. When given, the booking is linked to exactly that card (404 if it doesn't exist) instead of the usual find-or-create by `guestEmail`. `guestName`/`guestEmail`/`guestPhone` are still the booking's own snapshot of what was given - the form prefills them from the card, but whatever is sent is what's stored. */
             guestId?: string | null;
         };
@@ -4842,7 +4842,7 @@ export interface components {
              * @description Number of children in the party. Optional, defaults to 0.
              * @default 0
              */
-            children: number;
+            children?: number;
         };
         /** @description Body of `bookingStatusSchema`. */
         BookingStatusInput: {
@@ -4979,7 +4979,7 @@ export interface components {
             phone?: string | null;
             notes?: string | null;
             /** @default false */
-            vip: boolean;
+            vip?: boolean;
             dateOfBirth?: string | null;
             tags?: string[];
         };
@@ -5118,12 +5118,12 @@ export interface components {
             /** @description Hashed with bcrypt (cost 10) before storage; never stored or returned in plaintext. */
             password?: string;
             /** @default MANAGER */
-            role: components["schemas"]["Role"];
+            role?: components["schemas"]["Role"];
             /**
              * @description See `User`'s own description. Defaults to `true` - the known exceptions are set individually, at creation or later via `PATCH /users/{id}/overtime-eligibility`.
              * @default true
              */
-            overtimeEligible: boolean;
+            overtimeEligible?: boolean;
             /** @description See `User`'s own description. Omit for staff who don't punch a terminal; set later via `PATCH /users/{id}/enrollment-number` once known. */
             enrollmentNumber?: number;
             /** @description See `User`'s own description. Omit to leave unset; set later via `PATCH /users/{id}/staff-area` once known. */
@@ -5263,10 +5263,10 @@ export interface components {
             /** @description Trimmed, with inner runs of whitespace collapsed to one space. Must not differ only in letter case or spacing from a category already in use (400 on `category`, naming the existing spelling) - "cocktails" next to "Cocktails" would otherwise become a second menu tab. The exact existing spelling is always accepted. */
             category: string;
             /** @default KITCHEN */
-            department: components["schemas"]["MenuDepartment"];
+            department?: components["schemas"]["MenuDepartment"];
             price: number;
             /** @default true */
-            isAvailable: boolean;
+            isAvailable?: boolean;
             /** @description Set only for a `SPA`-department item - see `MenuItem.durationMinutes`. */
             durationMinutes?: number | null;
         };
@@ -5291,7 +5291,7 @@ export interface components {
             /** @description Omitted means `ROUND` (full replacement, like every other field here). */
             shape?: components["schemas"]["TableShape"];
             /** @default true */
-            isActive: boolean;
+            isActive?: boolean;
         };
         /** @description One entry of the array body of `PATCH /tables/positions` - mirrors `RoomUnitPositionInput` exactly, see that schema's own comment for why `positionX`/ `positionY` aren't under `required` despite conceptually needing to be present. */
         TablePositionInput: {
@@ -5632,12 +5632,12 @@ export interface components {
             roomTypeName: string;
             adults: number;
             /** @default 0 */
-            children: number;
+            children?: number;
             /**
              * @description Accepted but not stored - `Booking` has no infants count, and folding infants into `children` would change the party size every report counts. Named in the creation audit entry so it isn't lost entirely.
              * @default 0
              */
-            infants: number;
+            infants?: number;
             /** @description SiteMinder's total for the stay as a decimal string in THB, e.g. `"12500.00"`. Becomes the booking's agreed price - see the operation description. */
             totalPrice: string;
             /** @description Optional. If sent, must be `THB` - anything else is rejected, so a price in another currency can't be booked as baht. */
@@ -6173,10 +6173,10 @@ export interface components {
             serial: string;
             address: string;
             /** @default 4370 */
-            port: number;
+            port?: number;
             timezone: string;
             /** @default true */
-            active: boolean;
+            active?: boolean;
         };
         ShiftInterval: {
             startTime: string;

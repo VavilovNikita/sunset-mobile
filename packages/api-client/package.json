@@ -14,9 +14,10 @@
   },
   "scripts": {
     "sync-spec": "node scripts/sync-spec.mjs",
-    "generate": "openapi-typescript openapi.yaml -o src/schema.ts",
+    "generate": "openapi-typescript openapi.yaml -o src/schema.ts --default-non-nullable false",
     "typecheck": "tsc --noEmit -p .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "smoke": "tsx smoke/smoke.ts"
   },
   "dependencies": {
     "openapi-fetch": "^0.17.0"
@@ -26,6 +27,7 @@
     "openapi-typescript": "^7.13.0",
     "typescript": "~6.0.3",
     "vite": "^8.3.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "tsx": "^4.20.0"
   }
 }
