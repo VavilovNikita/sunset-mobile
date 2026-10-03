@@ -1,0 +1,17 @@
+{
+  "name": "@sunset/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Audience-neutral pure logic shared by both apps: date and money display. No network, no auth.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3",
+    "vite": "*",
+    "vitest": "^5.0.3"
+  }
+}

@@ -1,25 +1,49 @@
 {
   "expo": {
-    "name": "staff",
-    "slug": "staff",
-    "version": "1.0.0",
+    "name": "Sunset Staff",
+    "slug": "sunset-staff",
+    "scheme": "sunsetstaff",
+    "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0F262B",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F262B"
+    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sunsetbeach.staff",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Take a photo of a problem when reporting a maintenance task."
+      }
     },
     "android": {
+      "package": "com.sunsetbeach.staff",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0F262B",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Take a photo of a problem when reporting a maintenance task.",
+          "photosPermission": false,
+          "microphonePermission": false
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false
     }
   }
 }
