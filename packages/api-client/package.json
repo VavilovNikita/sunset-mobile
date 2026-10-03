@@ -1,0 +1,31 @@
+{
+  "name": "@sunset/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Types generated from sunset's openapi.yaml plus a typed fetch wrapper, scoped per audience (staff / guest).",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./staff": "./src/staff.ts",
+    "./guest": "./src/guest.ts",
+    "./errors": "./src/errors.ts",
+    "./schema": "./src/schema.ts"
+  },
+  "scripts": {
+    "sync-spec": "node scripts/sync-spec.mjs",
+    "generate": "openapi-typescript openapi.yaml -o src/schema.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  }
+}
