@@ -42,3 +42,13 @@ export function cashChange(orderTotal: string, tenderedInput: string): CashChang
   if (tendered < total) return { ok: false, reason: "insufficient", short: fromSatang(total - tendered) };
   return { ok: true, tendered: fromSatang(tendered), change: fromSatang(tendered - total) };
 }
+
+/**
+ * Whether a server amount is above zero - for gating a badge or a warning on what is owed ("gate on
+ * amounts, not counts", sunset-beach CLAUDE.md). A comparison only; never used to compute a figure.
+ */
+export function isPositiveAmount(amount: string | null | undefined): boolean {
+  if (!amount) return false;
+  const n = Number(amount);
+  return Number.isFinite(n) && n > 0;
+}

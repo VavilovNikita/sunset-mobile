@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { can, hasRoleAtLeast, homeEntriesFor, type Capability, type Role, type StaffUser } from "../src/lib/access";
+import { can, hasRoleAtLeast, homeEntriesFor, homeGroupsFor, type Capability, type Role, type StaffUser } from "../src/lib/access";
 
 const user = (role: Role, functions: StaffUser["functions"] = []): StaffUser => ({ id: "u", name: "Test", role, functions });
 
@@ -50,10 +50,19 @@ describe("job functions are their own axis", () => {
 });
 
 describe("home menu", () => {
-  it("a waiter sees floor work only", () => {
-    expect(homeEntriesFor(user("WAITER")).map((e) => e.href)).toEqual(["/pos", "/print", "/housekeeping", "/maintenance", "/roster"]);
+  it("a waiter sees floor work only, no front desk", () => {
+    expect(homeEntriesFor(user("WAITER")).map((e) => e.href).sort()).toEqual(["/housekeeping", "/maintenance", "/pos", "/print", "/roster"]);
   });
-  it("a cashier also gets the shift and spa", () => {
-    expect(homeEntriesFor(user("CASHIER")).map((e) => e.href)).toEqual(["/pos", "/shift", "/print", "/housekeeping", "/maintenance", "/spa", "/roster"]);
+  it("a cashier also gets the front desk, the shift and spa", () => {
+    const hrefs = homeEntriesFor(user("CASHIER")).map((e) => e.href);
+    for (const h of ["/today", "/bookings", "/guests", "/night-audit", "/shift", "/spa"]) expect(hrefs).toContain(h);
+  });
+  it("never renders an empty group, and keeps group order", () => {
+    for (const role of ["WAITER", "CASHIER", "MANAGER", "ADMIN"] as Role[]) {
+      const groups = homeGroupsFor(user(role));
+      expect(groups.every((g) => g.entries.length > 0)).toBe(true);
+      expect(new Set(groups.map((g) => g.title)).size).toBe(groups.length);
+    }
+    expect(homeGroupsFor(user("WAITER")).map((g) => g.title)).toEqual(["Front desk", "Restaurant", "Staff"]);
   });
 });

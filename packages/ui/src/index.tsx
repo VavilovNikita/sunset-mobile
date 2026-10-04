@@ -99,10 +99,13 @@ export function Field({ label, ...props }: TextInputProps & { label: string }) {
   );
 }
 
+/** Light fills (amber = attention, sand = not cleaned) need dark text to stay readable. */
+const LIGHT_BADGES = new Set<string>([colors.amber, colors.sand, colors.sand2]);
+
 export function Badge({ text, color }: { text: string; color: string }) {
   return (
     <View style={[styles.badge, { backgroundColor: color }]}>
-      <Text style={styles.badgeText}>{text}</Text>
+      <Text style={[styles.badgeText, LIGHT_BADGES.has(color) ? { color: colors.ink } : null]}>{text}</Text>
     </View>
   );
 }

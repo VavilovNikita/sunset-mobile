@@ -32,7 +32,8 @@ export type Capability =
   | "maintenance.changeStatus" // PATCH .../status - ENGINEER function, or MANAGER+
   | "spa.use" // /spa-appointments/** - CASHIER+
   | "roster.mine" // GET /roster/me - any staff
-  | "attendance.today"; // GET /attendance/today - MANAGER+
+  | "attendance.today" // GET /attendance/today - MANAGER+
+  | "frontdesk" // GET /bookings/**, check-in/out, folio payments, /guests/**, /property-map, /night-audit, /reports/in-house - CASHIER+
 
 export function can(user: StaffUser, capability: Capability): boolean {
   switch (capability) {
@@ -48,6 +49,7 @@ export function can(user: StaffUser, capability: Capability): boolean {
     case "shift.manage":
     case "housekeeping.change":
     case "spa.use":
+    case "frontdesk":
       return hasRoleAtLeast(user.role, "CASHIER");
     case "pos.voidSentItem":
     case "print.printers":
@@ -60,19 +62,36 @@ export function can(user: StaffUser, capability: Capability): boolean {
   }
 }
 
-export type HomeEntry = { href: string; label: string; capability: Capability };
+export type HomeEntry = { href: string; label: string; capability: Capability; group: string };
 
-/** The home menu, in the order the floor uses it. A role never sees an entry it can't open. */
+/** The home menu, grouped the way the web admin is. A role never sees an entry (or a group) it can't open. */
 export const HOME_ENTRIES: HomeEntry[] = [
-  { href: "/pos", label: "Tables & orders", capability: "pos.use" },
-  { href: "/shift", label: "Cash shift", capability: "shift.manage" },
-  { href: "/print", label: "Printing", capability: "print.queue" },
-  { href: "/housekeeping", label: "Housekeeping", capability: "housekeeping.view" },
-  { href: "/maintenance", label: "Maintenance", capability: "maintenance.view" },
-  { href: "/spa", label: "Spa schedule", capability: "spa.use" },
-  { href: "/roster", label: "My schedule", capability: "roster.mine" },
+  { href: "/today", label: "Today", capability: "frontdesk", group: "Front desk" },
+  { href: "/bookings", label: "Bookings", capability: "frontdesk", group: "Front desk" },
+  { href: "/in-house", label: "In house", capability: "frontdesk", group: "Front desk" },
+  { href: "/rooms-map", label: "Rooms", capability: "frontdesk", group: "Front desk" },
+  { href: "/guests", label: "Guests", capability: "frontdesk", group: "Front desk" },
+  { href: "/night-audit", label: "Night audit", capability: "frontdesk", group: "Front desk" },
+  { href: "/housekeeping", label: "Housekeeping", capability: "housekeeping.view", group: "Front desk" },
+  { href: "/maintenance", label: "Maintenance", capability: "maintenance.view", group: "Front desk" },
+  { href: "/pos", label: "Tables & orders", capability: "pos.use", group: "Restaurant" },
+  { href: "/shift", label: "Cash shift", capability: "shift.manage", group: "Restaurant" },
+  { href: "/print", label: "Printing", capability: "print.queue", group: "Restaurant" },
+  { href: "/spa", label: "Spa schedule", capability: "spa.use", group: "Spa" },
+  { href: "/roster", label: "My schedule", capability: "roster.mine", group: "Staff" },
 ];
 
 export function homeEntriesFor(user: StaffUser): HomeEntry[] {
   return HOME_ENTRIES.filter((entry) => can(user, entry.capability));
+}
+
+/** Entries grouped in menu order, empty groups dropped. */
+export function homeGroupsFor(user: StaffUser): { title: string; entries: HomeEntry[] }[] {
+  const groups: { title: string; entries: HomeEntry[] }[] = [];
+  for (const entry of homeEntriesFor(user)) {
+    const group = groups.find((g) => g.title === entry.group);
+    if (group) group.entries.push(entry);
+    else groups.push({ title: entry.group, entries: [entry] });
+  }
+  return groups;
 }

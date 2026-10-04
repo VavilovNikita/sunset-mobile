@@ -66,6 +66,10 @@ that work and must stay the only web-specific code:
   confirmation goes through `ask()`, never `Alert.alert` directly - otherwise a money action is a
   dead button in the preview.
 
+The backend's CORS allows GET/POST/PATCH/DELETE only (the web admin is same-origin and never needed
+more), so a `PUT` - assigning a room - fails in the browser preview with a CORS error and works on a
+phone, where there is no CORS. Check a `PUT` against the API directly, not through the preview.
+
 Label inputs and buttons with `aria-label`/`role`, not `accessibilityLabel`/`accessibilityRole`:
 RN 0.86 supports both on device, but react-native-web 0.21 only renders the `aria-*` ones, and the
 UI kit's `Field` relies on it to tie each input to its label.
