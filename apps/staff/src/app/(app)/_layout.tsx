@@ -36,6 +36,8 @@ export default function SignedInLayout() {
       <Stack.Screen name="today" options={{ title: "Today" }} />
       <Stack.Screen name="bookings/index" options={{ title: "Bookings" }} />
       <Stack.Screen name="bookings/[id]" options={{ title: "Booking" }} />
+      <Stack.Screen name="bookings/new" options={{ title: "New booking" }} />
+      <Stack.Screen name="calendar" options={{ title: "Calendar" }} />
       <Stack.Screen name="in-house" options={{ title: "In house" }} />
       <Stack.Screen name="rooms-map" options={{ title: "Rooms" }} />
       <Stack.Screen name="guests/index" options={{ title: "Guests" }} />

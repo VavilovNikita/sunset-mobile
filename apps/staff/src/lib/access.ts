@@ -68,6 +68,7 @@ export type HomeEntry = { href: string; label: string; capability: Capability; g
 export const HOME_ENTRIES: HomeEntry[] = [
   { href: "/today", label: "Today", capability: "frontdesk", group: "Front desk" },
   { href: "/bookings", label: "Bookings", capability: "frontdesk", group: "Front desk" },
+  { href: "/calendar", label: "Calendar", capability: "frontdesk", group: "Front desk" },
   { href: "/in-house", label: "In house", capability: "frontdesk", group: "Front desk" },
   { href: "/rooms-map", label: "Rooms", capability: "frontdesk", group: "Front desk" },
   { href: "/guests", label: "Guests", capability: "frontdesk", group: "Front desk" },
