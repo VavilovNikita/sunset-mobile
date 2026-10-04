@@ -41,6 +41,7 @@ const CONTENT_TYPES: Record<string, string> = {
 
 export const base64UrlSha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("base64url");
 const hexSha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const hexMd5 = (bytes: Buffer) => createHash("md5").update(bytes).digest("hex");
 
 /** A UUID derived from the content, so publishing the same build twice gives the same update id. */
 export function contentUuid(seed: string): string {
@@ -76,7 +77,9 @@ export function buildUpdate(opts: {
     const contentType = CONTENT_TYPES[file.ext.toLowerCase()] ?? "application/octet-stream";
     const name = `assets/${hexSha256(file.bytes)}.${file.ext}`;
     files.push({ name, bytes: file.bytes });
-    return { hash: base64UrlSha256(file.bytes), key: hexSha256(file.bytes).slice(0, 32), contentType, fileExtension: `.${file.ext}`, url: `${opts.baseUrl}/${name}` };
+    // `key` must be Metro's asset hash (MD5 of the file): expo-asset finds a downloaded image or font
+    // by that hash in expo-updates' localAssets map, so any other key leaves every asset unresolved.
+    return { hash: base64UrlSha256(file.bytes), key: hexMd5(file.bytes), contentType, fileExtension: `.${file.ext}`, url: `${opts.baseUrl}/${name}` };
   };
   const launchAsset = describe(opts.bundle);
   const assets = opts.assets.map(describe);

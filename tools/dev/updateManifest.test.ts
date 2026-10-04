@@ -25,6 +25,8 @@ describe("update manifest", () => {
     expect(manifest.launchAsset.contentType).toBe("application/javascript");
     expect(manifest.assets.map((a) => a.fileExtension)).toEqual([".png", ".xml"]);
     expect(manifest.assets[1]!.contentType).toBe("application/xml");
+    // expo-asset looks a downloaded asset up by Metro's hash (MD5 of the file), via this key.
+    expect(manifest.assets[0]!.key).toBe(createHash("md5").update(files.find((f) => f.name.endsWith(".png"))!.bytes).digest("hex"));
     // Every URL in the manifest is a file we publish.
     for (const url of [manifest.launchAsset.url, ...manifest.assets.map((a) => a.url)]) {
       const name = url.replace("https://example.test/mobile/staff/updates/0.1.0/android/", "");
