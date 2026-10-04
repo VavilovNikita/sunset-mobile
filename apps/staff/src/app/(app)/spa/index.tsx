@@ -115,6 +115,30 @@ function AppointmentSheet({ appointment, onClose, onChanged }: { appointment: Ap
     }
   }
 
+  // The billing door: one POS order explicitly linked to this appointment (spaAppointmentId), on the
+  // guest's booking, with one line per treatment priced live by the server - created in a single
+  // request, so the link can never exist without the lines (the web does it in two calls).
+  async function bill() {
+    const r = await action.run(() =>
+      call(
+        api.POST("/orders", {
+          body: {
+            spaAppointmentId: appointment.id,
+            bookingId: appointment.bookingId,
+            guestName: appointment.guestName,
+            items: appointment.treatments.map((t) => ({ menuItemId: t.treatmentMenuItemId, quantity: 1 })),
+          },
+        }),
+        "Could not open a bill for this appointment.",
+      ),
+    );
+    if (r.ok) {
+      onChanged();
+      onClose();
+      router.push(`/pos/order/${r.data.id}`);
+    }
+  }
+
   return (
     <Modal transparent animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" }}>
@@ -138,6 +162,18 @@ function AppointmentSheet({ appointment, onClose, onChanged }: { appointment: Ap
               <Field label="Why is it cancelled?" value={reason} onChangeText={setReason} maxLength={500} />
               <Button title="Cancel booking" variant="danger" busy={action.busy} disabled={reason.trim().length < 3} onPress={() => void setStatus("CANCELLED", reason.trim())} />
             </>
+          ) : null}
+          {appointment.orderId ? (
+            <Button
+              title="Open bill"
+              variant="secondary"
+              onPress={() => {
+                onClose();
+                router.push(`/pos/order/${appointment.orderId}`);
+              }}
+            />
+          ) : appointment.status === "BOOKED" || appointment.status === "COMPLETED" ? (
+            <Button title="Bill treatments" variant="secondary" busy={action.busy} onPress={() => void bill()} />
           ) : null}
           <ErrorText>{action.error}</ErrorText>
           <Button title="Close" variant="secondary" onPress={onClose} disabled={action.busy} />
