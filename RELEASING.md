@@ -67,6 +67,27 @@ JavaScript built for different native code.
 `eas submit -p ios --latest` (Apple Developer account needed). The VPS update endpoint answers iOS
 with "no update".
 
+### When a phone doesn't pick up an update
+
+The bottom of the home screen says `Version 0.1.0 (1)` while it runs the APK's own code and adds
+`· update <id>` once an update is running. If a published update never shows up, read what
+expo-updates itself says (Android SDK's adb, phone or emulator connected):
+
+```
+$adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+& $adb logcat -c
+& $adb logcat -s dev.expo.updates:*
+```
+
+then reopen the app. `Failed to download asset from URL …` names the file; one failed file
+discards the whole update. Check that URL with `curl.exe -sI`. The first release hit both of
+these, in this order:
+- 403 from nginx: a directory uploaded without read permission for www-data (`release.ts` now
+  runs `chmod -R a+rX` after every upload).
+- 403 with `cf-cache-status: HIT`: Cloudflare kept a cached error after the server was fixed.
+  Purge those URLs (Cloudflare → Caching → Configuration → Purge Cache). `nginx-mobile.conf` now
+  sends errors as `404 no-store`, so this shouldn't recur.
+
 ## Guest app
 
 For real guests it has to be in the stores.
