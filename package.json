@@ -1,6 +1,9 @@
 {
   "name": "sunset-mobile",
   "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
   "workspaces": [
     "apps/*",
     "packages/*",

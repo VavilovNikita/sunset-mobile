@@ -14,7 +14,8 @@ primitives and the palette).
 
 ## Running
 
-You need Node 20+, Docker (Docker Desktop is fine), Java 21, and a checkout of `sunset` next to
+You need Node 22.13 or newer (22 LTS from nodejs.org; React Native, Metro and Vitest all refuse
+Node 20 - the tests fail at start with `does not provide an export named 'styleText'`), Docker (Docker Desktop is fine), Java 21, and a checkout of `sunset` next to
 this one (`../sunset`, or set `SUNSET_DIR`). Then, from the repo root:
 
 ```bash
