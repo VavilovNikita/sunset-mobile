@@ -49,6 +49,17 @@ describe("job functions are their own axis", () => {
   });
 });
 
+describe("settings", () => {
+  it("is MANAGER+ for setup and ADMIN-only for users and guest emails", () => {
+    expect(can(user("CASHIER"), "settings.manage")).toBe(false);
+    expect(can(user("MANAGER"), "settings.manage")).toBe(true);
+    expect(can(user("MANAGER"), "settings.admin")).toBe(false);
+    expect(can(user("ADMIN"), "settings.admin")).toBe(true);
+    expect(can(user("MANAGER"), "reports")).toBe(true);
+    expect(can(user("CASHIER"), "reports")).toBe(false);
+  });
+});
+
 describe("home menu", () => {
   it("a waiter sees floor work only, no front desk", () => {
     expect(homeEntriesFor(user("WAITER")).map((e) => e.href).sort()).toEqual(["/housekeeping", "/maintenance", "/pos", "/print", "/roster"]);

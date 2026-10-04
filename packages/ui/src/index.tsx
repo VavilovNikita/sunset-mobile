@@ -4,6 +4,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -101,6 +102,16 @@ export function Field({ label, ...props }: TextInputProps & { label: string }) {
 
 /** Light fills (amber = attention, sand = not cleaned) need dark text to stay readable. */
 const LIGHT_BADGES = new Set<string>([colors.amber, colors.sand, colors.sand2]);
+
+/** A labelled on/off switch, one row, full-width touch target. */
+export function Toggle({ label, value, onChange, disabled }: { label: string; value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: TOUCH }}>
+      <Text style={{ color: colors.cream, fontSize: 16, flex: 1 }}>{label}</Text>
+      <Switch aria-label={label} value={value} onValueChange={onChange} disabled={disabled} trackColor={{ true: colors.sea, false: colors.ink3 }} />
+    </View>
+  );
+}
 
 export function Badge({ text, color }: { text: string; color: string }) {
   return (

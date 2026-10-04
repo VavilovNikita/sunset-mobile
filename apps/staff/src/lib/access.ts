@@ -33,6 +33,8 @@ export type Capability =
   | "spa.use" // /spa-appointments/** - CASHIER+
   | "roster.mine" // GET /roster/me - any staff
   | "attendance.today" // GET /attendance/today - MANAGER+
+  | "settings.manage" // /menu writes, /tables, /rooms, /room-units, /pricing, /printers, /attendance/**, /roster - MANAGER+
+  | "settings.admin" // /users/**, /settings/** - ADMIN only
   | "reports" // GET /reports/manager|occupancy|market-segment|pos-sales-mix|forecast, GET /audit-log - MANAGER+
   | "frontdesk" // GET /bookings/**, check-in/out, folio payments, /guests/**, /property-map, /night-audit, /reports/in-house - CASHIER+
 
@@ -56,7 +58,10 @@ export function can(user: StaffUser, capability: Capability): boolean {
     case "print.printers":
     case "attendance.today":
     case "reports":
+    case "settings.manage":
       return hasRoleAtLeast(user.role, "MANAGER");
+    case "settings.admin":
+      return user.role === "ADMIN";
     case "maintenance.changeStatus":
       // A job function is its own axis, never part of the ladder: a WAITER who is also an
       // ENGINEER may close a task; a MANAGER may as an explicit fallback (SecurityConfig#engineerOrManagerPlus).
@@ -84,6 +89,7 @@ export const HOME_ENTRIES: HomeEntry[] = [
   { href: "/reports", label: "Reports", capability: "reports", group: "Reports" },
   { href: "/history", label: "History", capability: "reports", group: "Reports" },
   { href: "/roster", label: "My schedule", capability: "roster.mine", group: "Staff" },
+  { href: "/settings", label: "Settings", capability: "settings.manage", group: "Setup" },
 ];
 
 export function homeEntriesFor(user: StaffUser): HomeEntry[] {

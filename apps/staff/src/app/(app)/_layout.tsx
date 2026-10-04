@@ -45,6 +45,16 @@ export default function SignedInLayout() {
       <Stack.Screen name="reports/sales" options={{ title: "POS sales" }} />
       <Stack.Screen name="reports/forecast" options={{ title: "Forecast" }} />
       <Stack.Screen name="history" options={{ title: "History" }} />
+      <Stack.Screen name="settings/index" options={{ title: "Settings" }} />
+      <Stack.Screen name="settings/menu" options={{ title: "Menu & treatments" }} />
+      <Stack.Screen name="settings/tables" options={{ title: "Tables" }} />
+      <Stack.Screen name="settings/rooms" options={{ title: "Rooms" }} />
+      <Stack.Screen name="settings/rates" options={{ title: "Rates" }} />
+      <Stack.Screen name="settings/roster" options={{ title: "Roster" }} />
+      <Stack.Screen name="settings/printers" options={{ title: "Printers" }} />
+      <Stack.Screen name="settings/devices" options={{ title: "Fingerprint terminals" }} />
+      <Stack.Screen name="settings/users" options={{ title: "Users" }} />
+      <Stack.Screen name="settings/emails" options={{ title: "Guest emails" }} />
       <Stack.Screen name="in-house" options={{ title: "In house" }} />
       <Stack.Screen name="rooms-map" options={{ title: "Rooms" }} />
       <Stack.Screen name="guests/index" options={{ title: "Guests" }} />
