@@ -33,6 +33,7 @@ export type Capability =
   | "spa.use" // /spa-appointments/** - CASHIER+
   | "roster.mine" // GET /roster/me - any staff
   | "attendance.today" // GET /attendance/today - MANAGER+
+  | "reports" // GET /reports/manager|occupancy|market-segment|pos-sales-mix|forecast, GET /audit-log - MANAGER+
   | "frontdesk" // GET /bookings/**, check-in/out, folio payments, /guests/**, /property-map, /night-audit, /reports/in-house - CASHIER+
 
 export function can(user: StaffUser, capability: Capability): boolean {
@@ -54,6 +55,7 @@ export function can(user: StaffUser, capability: Capability): boolean {
     case "pos.voidSentItem":
     case "print.printers":
     case "attendance.today":
+    case "reports":
       return hasRoleAtLeast(user.role, "MANAGER");
     case "maintenance.changeStatus":
       // A job function is its own axis, never part of the ladder: a WAITER who is also an
@@ -79,6 +81,8 @@ export const HOME_ENTRIES: HomeEntry[] = [
   { href: "/shift", label: "Cash shift", capability: "shift.manage", group: "Restaurant" },
   { href: "/print", label: "Printing", capability: "print.queue", group: "Restaurant" },
   { href: "/spa", label: "Spa schedule", capability: "spa.use", group: "Spa" },
+  { href: "/reports", label: "Reports", capability: "reports", group: "Reports" },
+  { href: "/history", label: "History", capability: "reports", group: "Reports" },
   { href: "/roster", label: "My schedule", capability: "roster.mine", group: "Staff" },
 ];
 
