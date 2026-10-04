@@ -88,7 +88,11 @@ function publish(remoteSubdir: string, files: { name: string; bytes: Buffer }[],
   // so a phone checking mid-upload never sees a manifest whose files aren't there yet.
   for (const dir of dirs) run("scp", ["-q", "-r", join(local, dir), `${host}:${remote}/`]);
   for (const f of files.filter((f) => dirname(f.name) === ".")) run("scp", ["-q", join(local, f.name), `${host}:${remote}/${f.name}`]);
-  run("scp", ["-q", join(local, last.name), `${host}:${remote}/${last.name}`]);
+  // scp keeps the source's modes, and a directory made on Windows arrives as 0700 - nginx (www-data)
+  // then answers 403 for every file in it, and the phone drops the whole update. Set them explicitly.
+  // The pointer goes up under a temporary name and is renamed only once it's readable too.
+  run("scp", ["-q", join(local, last.name), `${host}:${remote}/${last.name}.uploading`]);
+  run("ssh", [host, `chmod -R a+rX '${remote}' && mv -f '${remote}/${last.name}.uploading' '${remote}/${last.name}'`]);
   rmSync(local, { recursive: true, force: true });
   console.log(`\nUploaded to ${host}:${remote}`);
 }
