@@ -74,6 +74,19 @@ UI kit's `Field` relies on it to tie each input to its label.
 realistic - a stay is confirmed before check-in, because the POS only charges CONFIRMED/PAID
 bookings to a room (same rule as the web POS); an unrealistic seed hides real bugs.
 
+## Staff app releases (Android, self-hosted)
+
+The staff APK and its JavaScript updates are static files on the hotel's VPS, published by
+`tools/dev/release.ts` and served by `deploy/nginx-mobile.conf` - not Play Store, not EAS Update
+(RELEASING.md). `tools/dev/updateManifest.ts` writes the Expo Updates protocol-1 manifest in the
+exact shape expo-updates' Android loader parses (checked against its Kotlin source, since the docs
+weren't reachable): every file is named by and checked against its SHA-256, and the nginx `map`
+picks the manifest by `Expo-Platform` + `Expo-Runtime-Version` (an `if` in that location would
+silently disable `try_files` - that was the first version's bug). `runtimeVersion` is the app
+version: bump it (`release -- bump --native`) whenever native code changes, or a phone gets
+JavaScript for native modules it doesn't have. A release always uses the production URLs in
+`release.ts`, never `apps/*/.env`.
+
 ## Known gaps (need a backend change first)
 
 - No "my own attendance punches" endpoint for ordinary staff (`/attendance/**` is MANAGER+), so the

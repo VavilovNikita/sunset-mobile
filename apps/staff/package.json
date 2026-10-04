@@ -7,6 +7,7 @@
     "@sunset/core": "*",
     "@sunset/ui": "*",
     "expo": "~57.0.26",
+    "expo-application": "~57.0.3",
     "expo-camera": "~57.0.6",
     "expo-constants": "~57.0.20",
     "expo-image-picker": "~57.0.20",

@@ -19,7 +19,8 @@
     "staff": "tsx tools/dev/start-app.ts staff",
     "guest": "tsx tools/dev/start-app.ts guest",
     "staff:web": "tsx tools/dev/start-app.ts staff --web",
-    "guest:web": "tsx tools/dev/start-app.ts guest --web"
+    "guest:web": "tsx tools/dev/start-app.ts guest --web",
+    "release": "tsx tools/dev/release.ts"
   },
   "devDependencies": {
     "tsx": "^4.20.0"

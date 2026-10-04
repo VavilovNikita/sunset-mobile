@@ -3,6 +3,7 @@ import { Body, Button, Card, Label, Screen, Title } from "@sunset/ui";
 import { homeEntriesFor } from "../../lib/access";
 import { useSession, useSignedIn } from "../../lib/session";
 import { NotPrintedBanner } from "../../components/NotPrintedBanner";
+import { AppUpdates, versionLabel } from "../../components/AppUpdates";
 
 export default function Home() {
   const { user } = useSignedIn();
@@ -15,6 +16,7 @@ export default function Home() {
         {user.role}
         {functions}
       </Label>
+      <AppUpdates />
       <NotPrintedBanner />
       {homeEntriesFor(user).map((entry) => (
         <Card key={entry.href} onPress={() => router.push(entry.href as never)}>
@@ -22,6 +24,7 @@ export default function Home() {
         </Card>
       ))}
       <Button title="Sign out" variant="secondary" onPress={() => void signOut()} />
+      <Body muted>{`Version ${versionLabel()}`}</Body>
     </Screen>
   );
 }
