@@ -18,6 +18,9 @@
       "bundleIdentifier": "com.sunsetbeach.guest",
       "infoPlist": {
         "NSCameraUsageDescription": "Scan the QR code on your table to order food and drinks."
+      },
+      "config": {
+        "usesNonExemptEncryption": false
       }
     },
     "android": {
@@ -51,6 +54,9 @@
     ],
     "experiments": {
       "typedRoutes": false
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     }
   }
 }

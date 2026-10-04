@@ -54,7 +54,8 @@ npm run verify   # the above, plus `expo export` (iOS + Android) and `expo prebu
                  # plus a check that neither bundle contains the other audience's client/token key
 ```
 
-EAS builds are not configured here yet - the owner runs `eas build` with their own account.
+Installing the apps on staff phones (and publishing the guest app) is in [RELEASING.md](RELEASING.md):
+EAS builds and over-the-air updates, run by the owner with their own Expo/Apple accounts.
 
 ## Updating the API types
 

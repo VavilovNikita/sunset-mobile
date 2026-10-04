@@ -18,6 +18,9 @@
       "bundleIdentifier": "com.sunsetbeach.staff",
       "infoPlist": {
         "NSCameraUsageDescription": "Take a photo of a problem when reporting a maintenance task."
+      },
+      "config": {
+        "usesNonExemptEncryption": false
       }
     },
     "android": {
@@ -50,6 +53,9 @@
     ],
     "experiments": {
       "typedRoutes": false
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     }
   }
 }
