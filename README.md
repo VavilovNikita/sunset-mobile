@@ -59,14 +59,16 @@ EAS builds are not configured here yet - the owner runs `eas build` with their o
 ## Updating the API types
 
 ```bash
-SUNSET_SPEC=/path/to/sunset/openapi.yaml npm run sync-spec --workspace @sunset/api-client
+git -C ../sunset fetch origin master   # the spec is taken from sunset's origin/master, not its checked-out branch
+npm run sync-spec --workspace @sunset/api-client   # or SUNSET_SPEC=/path/to/openapi.yaml
 npm run generate:api
 npm run check    # the apps' typecheck shows every place the contract change matters
 ```
 
 `packages/api-client/test/spec-sync.test.ts` fails if `src/schema.ts` isn't exactly what the
 generator produces from the vendored spec, and (when a `sunset` checkout sits next to this repo)
-if the vendored spec has drifted from sunset's.
+if the vendored spec has drifted from sunset's `origin/master`. Line endings are ignored on both
+checks (`.gitattributes` keeps the repo LF, but a Windows `core.autocrlf` checkout may not).
 
 ### Against a real backend
 

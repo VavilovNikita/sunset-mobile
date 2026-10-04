@@ -5845,7 +5845,11 @@ paths:
         `CANCELLED` (any other status counts, `NEW` included, same as availability) that falls
         inside the range. A segment that starts before `from` or ends after `to` counts only the
         nights inside it. A segment with no physical room assigned yet still counts for its room
-        type.
+        type. A guest still `CHECKED_IN` after `checkOut` (`OverstayRule`) also counts, for every
+        night from `checkOut` through tonight, in their last segment's room type and at zero
+        revenue - they are physically in the room, but nothing was agreed or priced for those
+        nights. This is the one population every room report reads (top production, market
+        segment, the manager report, the forecast and the in-house list), so they agree.
 
 
         **Room revenue** is each such segment's `totalPrice`, prorated to the nights inside the
@@ -6239,7 +6243,8 @@ paths:
         night (`fromDate <= date <= toDate`). `availableForSale` = `totalRooms - outOfOrder`.
         `occupied` - room-nights sold for this one night, exactly
         `GET /reports/occupancy?from=date&to=date`'s `total.roomNightsSold` (every non-`CANCELLED`
-        booking's segment covering the night, checked in or not). `complimentary` / `houseUse` -
+        booking's segment covering the night, checked in or not, plus an overdue guest still checked
+        in past `checkOut` - see `GET /reports/occupancy`). `complimentary` / `houseUse` -
         the occupied rooms whose booking `purpose` is `COMPLIMENTARY` / `HOUSE_USE`;
         `occupiedExcludingCompAndHouseUse` = `occupied - complimentary - houseUse`.
         `occupancyPercent` = `occupied / availableForSale × 100` - out-of-order rooms are taken

@@ -1,0 +1,3 @@
+# One line ending everywhere. On Windows, core.autocrlf=true checked generated files (src/schema.ts)
+# out with CRLF, and the "regenerate and compare" test failed on a file that was in fact up to date.
+* text=auto eol=lf
