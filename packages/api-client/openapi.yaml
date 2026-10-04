@@ -5335,6 +5335,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
 
+  /orders/{id}/print-receipt:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: printOrderReceipt
+      tags: [Orders]
+      summary: Reprint a paid order's guest receipt
+      description: >
+        Requires role `CASHIER` or above - the same floor as `POST /orders/{id}/close`, whose
+        receipt this repeats. Regenerates the guest receipt from the order, its lines and its
+        `Payment` (the room and guest for a room charge), titled "GUEST RECEIPT - COPY" so it
+        can't be mistaken for the original, and prints it to the active `CASHIER` printer.
+        Delivery is attempted before responding, like the pre-bill - the person asked for this
+        printout and is waiting for it. Creates a `GUEST_RECEIPT` `PrintJob`; changes nothing
+        about the order or its payment, and is not audited (the print job is the record). No-op
+        (still returns 201, `attempted: false`) if there's no active `CASHIER` printer.
+      responses:
+        "201":
+          description: Receipt copy print attempted (or skipped - see `attempted`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrintAttemptResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Order not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "409":
+          description: The order isn't `PAID`, so it has no receipt to reprint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
   /orders/{id}/cancel:
     parameters:
       - name: id
@@ -6042,9 +6086,18 @@ paths:
 
 
         **Segment.** `COM` - `purpose` is `COMPLIMENTARY`. `HFO` (house folio) - `purpose` is
-        `HOUSE_USE`. Otherwise by `channel`: `OTA` for `BOOKING_COM`, `AIRBNB`, `AGODA`, `EXPEDIA`
-        and `OTHER`; `WLK` for `WALK_IN`; `DIR` for `DIRECT` and `PHONE`. It is the same grouping
+        `HOUSE_USE`. Otherwise by `channel`: `OTA` for `BOOKING_COM`, `AIRBNB`, `AGODA`, `EXPEDIA`,
+        and for `OTHER` on a booking imported from SiteMinder (an OTA SiteMinder showed under a name
+        this system has no channel value for); `OTH` for every other `OTHER` booking - entered by
+        staff, including every staff booking made before `channel` existed, whose real channel was
+        never recorded; `WLK` for `WALK_IN`; `DIR` for `DIRECT` and `PHONE`. It is the same grouping
         as `GET /reports/top-production`, one level up.
+
+
+        **Six segments, not the legacy sheet's five.** The Z360 layout this mirrors has no
+        "unknown" line, and this report used to fold staff-entered `OTHER` into `OTA` to keep its
+        five rows - which credited online agents with bookings that never came through one. `OTH`
+        moves those room-nights and that revenue out of `OTA`; the total is unchanged.
 
 
         **What counts** is the same population as `GET /reports/top-production` and
@@ -6055,8 +6108,8 @@ paths:
         count of parties, not guest-nights.
 
 
-        All five segments are always returned, in the order `COM`, `DIR`, `HFO`, `OTA`, `WLK`,
-        zero rows included. The `*Percent` fields are each segment's share of `total`, null when
+        All six segments are always returned, in the order `COM`, `DIR`, `HFO`, `OTA`, `OTH`,
+        `WLK`, zero rows included. The `*Percent` fields are each segment's share of `total`, null when
         the total is zero. `averageRate` is revenue / room-nights, null when no room-night was
         sold.
       parameters:
@@ -6122,7 +6175,7 @@ paths:
 
         **Columns.** `arrival`/`departure` are the whole booking's `checkIn`/`checkOut`, not the
         current segment's (after a relocation they differ). `marketSegment` is the same
-        `COM`/`DIR`/`HFO`/`OTA`/`WLK` rollup as `GET /reports/market-segment`. The booking id is
+        `COM`/`DIR`/`HFO`/`OTA`/`OTH`/`WLK` rollup as `GET /reports/market-segment`. The booking id is
         the reservation reference - there is no separate reservation number.
 
 
@@ -11865,6 +11918,7 @@ components:
         - checkedOutAt
         - externalReference
         - externalChannel
+        - cancellationReason
         - createdAt
         - updatedAt
       properties:
@@ -11953,6 +12007,15 @@ components:
             For a SiteMinder import, the channel name exactly as SiteMinder showed it - what `channel`
             was mapped from, and the only record of which OTA an `OTHER` booking came through. Null
             for every other booking.
+        cancellationReason:
+          type: string
+          nullable: true
+          description: >
+            The reason staff gave when this booking was cancelled (`BookingStatusInput.cancellationReason`).
+            Set only while `status` is `CANCELLED`, and only for the current cancellation: cleared if
+            the booking is moved out of `CANCELLED`. Null for a cancellation without a reason (the
+            SiteMinder import, the unconfirmed-booking expiry sweep) and for cancellations made before
+            this field existed - their reason, if any, is only in the audit log.
         segments:
           type: array
           minItems: 1
@@ -12039,8 +12102,8 @@ components:
           nullable: true
           description: >
             Why the booking is being cancelled. Read only when this request moves the booking into
-            `CANCELLED` (ignored otherwise) and recorded in that status change's audit entry - it is
-            not a column on the booking. Optional at the API so system paths (the SiteMinder import,
+            `CANCELLED` (ignored otherwise); stored as `Booking.cancellationReason` and repeated in
+            that status change's audit entry. Optional at the API so system paths (the SiteMinder import,
             the expiry sweep) keep working; the admin screens require it before they send a cancel.
 
     Guest:
@@ -15971,10 +16034,11 @@ components:
 
     MarketSegment:
       type: string
-      enum: [COM, DIR, HFO, OTA, WLK]
+      enum: [COM, DIR, HFO, OTA, OTH, WLK]
       description: >
         `COM` complimentary, `DIR` direct (`DIRECT`/`PHONE`), `HFO` house use, `OTA` online
-        travel agents and other third parties, `WLK` walk-in. Derived from a booking's
+        travel agents (including a SiteMinder-imported `OTHER`), `OTH` other / not recorded (a
+        staff-entered `OTHER` booking), `WLK` walk-in. Derived from a booking's
         `purpose` and `channel`, never stored - see `GET /reports/market-segment`.
 
     MarketSegmentReport:
@@ -15990,7 +16054,7 @@ components:
           pattern: '^\d{4}-\d{2}-\d{2}$'
         segments:
           type: array
-          description: Always all five segments, in the order COM, DIR, HFO, OTA, WLK.
+          description: Always all six segments, in the order COM, DIR, HFO, OTA, OTH, WLK.
           items:
             $ref: "#/components/schemas/MarketSegmentRow"
         total:

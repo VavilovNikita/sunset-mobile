@@ -2038,6 +2038,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orders/{id}/print-receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reprint a paid order's guest receipt
+         * @description Requires role `CASHIER` or above - the same floor as `POST /orders/{id}/close`, whose receipt this repeats. Regenerates the guest receipt from the order, its lines and its `Payment` (the room and guest for a room charge), titled "GUEST RECEIPT - COPY" so it can't be mistaken for the original, and prints it to the active `CASHIER` printer. Delivery is attempted before responding, like the pre-bill - the person asked for this printout and is waiting for it. Creates a `GUEST_RECEIPT` `PrintJob`; changes nothing about the order or its payment, and is not audited (the print job is the record). No-op (still returns 201, `attempted: false`) if there's no active `CASHIER` printer.
+         */
+        post: operations["printOrderReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/orders/{id}/cancel": {
         parameters: {
             query?: never;
@@ -2376,11 +2398,13 @@ export interface paths {
          * Room-nights, guests and room revenue by market segment for a date range
          * @description Requires role `MANAGER` or above, same floor as `GET /reports/revenue-export`.
          *
-         *     **Segment.** `COM` - `purpose` is `COMPLIMENTARY`. `HFO` (house folio) - `purpose` is `HOUSE_USE`. Otherwise by `channel`: `OTA` for `BOOKING_COM`, `AIRBNB`, `AGODA`, `EXPEDIA` and `OTHER`; `WLK` for `WALK_IN`; `DIR` for `DIRECT` and `PHONE`. It is the same grouping as `GET /reports/top-production`, one level up.
+         *     **Segment.** `COM` - `purpose` is `COMPLIMENTARY`. `HFO` (house folio) - `purpose` is `HOUSE_USE`. Otherwise by `channel`: `OTA` for `BOOKING_COM`, `AIRBNB`, `AGODA`, `EXPEDIA`, and for `OTHER` on a booking imported from SiteMinder (an OTA SiteMinder showed under a name this system has no channel value for); `OTH` for every other `OTHER` booking - entered by staff, including every staff booking made before `channel` existed, whose real channel was never recorded; `WLK` for `WALK_IN`; `DIR` for `DIRECT` and `PHONE`. It is the same grouping as `GET /reports/top-production`, one level up.
+         *
+         *     **Six segments, not the legacy sheet's five.** The Z360 layout this mirrors has no "unknown" line, and this report used to fold staff-entered `OTHER` into `OTA` to keep its five rows - which credited online agents with bookings that never came through one. `OTH` moves those room-nights and that revenue out of `OTA`; the total is unchanged.
          *
          *     **What counts** is the same population as `GET /reports/top-production` and `GET /reports/occupancy`: nights of non-`CANCELLED` bookings' segments inside the range, revenue prorated to those nights and rounded once. `guests` is `adults + children` summed over the distinct bookings with at least one night in the range - a booking counts once however many of its nights (or segments, after a relocation) fall inside it. It is a head count of parties, not guest-nights.
          *
-         *     All five segments are always returned, in the order `COM`, `DIR`, `HFO`, `OTA`, `WLK`, zero rows included. The `*Percent` fields are each segment's share of `total`, null when the total is zero. `averageRate` is revenue / room-nights, null when no room-night was sold.
+         *     All six segments are always returned, in the order `COM`, `DIR`, `HFO`, `OTA`, `OTH`, `WLK`, zero rows included. The `*Percent` fields are each segment's share of `total`, null when the total is zero. `averageRate` is revenue / room-nights, null when no room-night was sold.
          */
         get: operations["getMarketSegmentReport"];
         put?: never;
@@ -2406,7 +2430,7 @@ export interface paths {
          *
          *     **One row per room, not per booking - and these are the same thing.** A booking's segments are contiguous and never overlap in time (enforced after every segment write), so a booking covers any one night with exactly one segment, in exactly one room. `adults` and `children` are the booking's own counts; there is no multi-room booking whose party would need splitting across rows.
          *
-         *     **Columns.** `arrival`/`departure` are the whole booking's `checkIn`/`checkOut`, not the current segment's (after a relocation they differ). `marketSegment` is the same `COM`/`DIR`/`HFO`/`OTA`/`WLK` rollup as `GET /reports/market-segment`. The booking id is the reservation reference - there is no separate reservation number.
+         *     **Columns.** `arrival`/`departure` are the whole booking's `checkIn`/`checkOut`, not the current segment's (after a relocation they differ). `marketSegment` is the same `COM`/`DIR`/`HFO`/`OTA`/`OTH`/`WLK` rollup as `GET /reports/market-segment`. The booking id is the reservation reference - there is no separate reservation number.
          *
          *     **Left out of the legacy Z180 layout:** nationality, company and remark. None of them is recorded on `Guest` or `Booking` (`Guest.notes` and tags are guest-level, not a per-stay remark), so they are omitted rather than filled from an unrelated field.
          *
@@ -4820,6 +4844,8 @@ export interface components {
             externalReference: string | null;
             /** @description For a SiteMinder import, the channel name exactly as SiteMinder showed it - what `channel` was mapped from, and the only record of which OTA an `OTHER` booking came through. Null for every other booking. */
             externalChannel: string | null;
+            /** @description The reason staff gave when this booking was cancelled (`BookingStatusInput.cancellationReason`). Set only while `status` is `CANCELLED`, and only for the current cancellation: cleared if the booking is moved out of `CANCELLED`. Null for a cancellation without a reason (the SiteMinder import, the unconfirmed-booking expiry sweep) and for cancellations made before this field existed - their reason, if any, is only in the audit log. */
+            cancellationReason: string | null;
             /** @description The booking's stay broken into room legs, ordered by `checkIn` ascending. See `BookingSegment`'s description. */
             segments: components["schemas"]["BookingSegment"][];
             /** Format: date-time */
@@ -4856,7 +4882,7 @@ export interface components {
             adults?: number;
             /** @description Optional. Omitted leaves the child count as it is; present sets it. Not nullable. */
             children?: number;
-            /** @description Why the booking is being cancelled. Read only when this request moves the booking into `CANCELLED` (ignored otherwise) and recorded in that status change's audit entry - it is not a column on the booking. Optional at the API so system paths (the SiteMinder import, the expiry sweep) keep working; the admin screens require it before they send a cancel. */
+            /** @description Why the booking is being cancelled. Read only when this request moves the booking into `CANCELLED` (ignored otherwise); stored as `Booking.cancellationReason` and repeated in that status change's audit entry. Optional at the API so system paths (the SiteMinder import, the expiry sweep) keep working; the admin screens require it before they send a cancel. */
             cancellationReason?: string | null;
         };
         /**
@@ -6361,15 +6387,15 @@ export interface components {
             adr: string | null;
         };
         /**
-         * @description `COM` complimentary, `DIR` direct (`DIRECT`/`PHONE`), `HFO` house use, `OTA` online travel agents and other third parties, `WLK` walk-in. Derived from a booking's `purpose` and `channel`, never stored - see `GET /reports/market-segment`.
+         * @description `COM` complimentary, `DIR` direct (`DIRECT`/`PHONE`), `HFO` house use, `OTA` online travel agents (including a SiteMinder-imported `OTHER`), `OTH` other / not recorded (a staff-entered `OTHER` booking), `WLK` walk-in. Derived from a booking's `purpose` and `channel`, never stored - see `GET /reports/market-segment`.
          * @enum {string}
          */
-        MarketSegment: "COM" | "DIR" | "HFO" | "OTA" | "WLK";
+        MarketSegment: "COM" | "DIR" | "HFO" | "OTA" | "OTH" | "WLK";
         /** @description `GET /reports/market-segment` - see that operation for what counts. */
         MarketSegmentReport: {
             from: string;
             to: string;
-            /** @description Always all five segments, in the order COM, DIR, HFO, OTA, WLK. */
+            /** @description Always all six segments, in the order COM, DIR, HFO, OTA, OTH, WLK. */
             segments: components["schemas"]["MarketSegmentRow"][];
             total: components["schemas"]["MarketSegmentRow"];
         };
@@ -11886,6 +11912,48 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             /** @description Order not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    printOrderReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Receipt copy print attempted (or skipped - see `attempted`). */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrintAttemptResult"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Order not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The order isn't `PAID`, so it has no receipt to reprint. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
