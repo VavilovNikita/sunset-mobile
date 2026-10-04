@@ -46,7 +46,7 @@ function RosterBody() {
       </Row>
       <ErrorText>{roster.error}</ErrorText>
       {roster.loading && !roster.data ? <Loading /> : null}
-      {roster.data?.length === 0 ? <Body muted>Nothing scheduled this month - days without an entry are days off.</Body> : null}
+      {roster.data?.length === 0 ? <Body muted>This month hasn't been scheduled yet - no shifts or days off are set. Check back once the roster is published.</Body> : null}
       {(roster.data ?? [])
         .slice()
         .sort((a, b) => a.date.localeCompare(b.date))

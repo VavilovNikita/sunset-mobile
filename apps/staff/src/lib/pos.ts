@@ -17,9 +17,13 @@ export function menuCategories(menu: MenuItem[]): string[] {
   return [...new Set(menu.map((m) => m.category))].sort((a, b) => a.localeCompare(b));
 }
 
-/** A room charge needs a live booking - same as sunset-beach lib/pos/roomCharge.ts. */
-export function isChargeableBooking(booking: Pick<Booking, "status">): boolean {
-  return booking.status === "CONFIRMED" || booking.status === "PAID";
+/**
+ * A room charge needs a guest in the house: checked in and not cancelled, whatever the booking
+ * status - a walk-in stays NEW until someone confirms it. Same rule as sunset-beach
+ * lib/pos/roomCharge.ts.
+ */
+export function isChargeableBooking(booking: Pick<Booking, "status" | "occupancyStatus">): boolean {
+  return booking.status !== "CANCELLED" && booking.occupancyStatus === "CHECKED_IN";
 }
 
 export const isOpenForItems = (order: Pick<Order, "status">) => order.status === "OPEN" || order.status === "SENT";

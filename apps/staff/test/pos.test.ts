@@ -30,10 +30,12 @@ describe("line rules", () => {
   it("labels an order by receipt number with the id beside it", () => {
     expect(orderLabel({ number: 1234, id: "abcdef12-3456" })).toBe("#1234 · abcdef12");
   });
-  it("only charges to a live booking", () => {
-    expect(isChargeableBooking({ status: "CONFIRMED" })).toBe(true);
-    expect(isChargeableBooking({ status: "NEW" })).toBe(false);
-    expect(isChargeableBooking({ status: "CANCELLED" })).toBe(false);
+  it("charges to a checked-in guest whatever the booking status, never a cancelled one", () => {
+    expect(isChargeableBooking({ status: "NEW", occupancyStatus: "CHECKED_IN" })).toBe(true);
+    expect(isChargeableBooking({ status: "PAID", occupancyStatus: "CHECKED_IN" })).toBe(true);
+    expect(isChargeableBooking({ status: "CONFIRMED", occupancyStatus: "EXPECTED" })).toBe(false);
+    expect(isChargeableBooking({ status: "CONFIRMED", occupancyStatus: "CHECKED_OUT" })).toBe(false);
+    expect(isChargeableBooking({ status: "CANCELLED", occupancyStatus: "CHECKED_IN" })).toBe(false);
   });
 });
 
