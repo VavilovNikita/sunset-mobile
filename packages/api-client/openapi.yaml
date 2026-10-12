@@ -965,7 +965,10 @@ paths:
       operationId: createRoom
       tags: [Rooms]
       summary: Create a room
-      description: Requires any authenticated staff session (ADMIN or MANAGER).
+      description: >
+        Requires any authenticated staff session (ADMIN or MANAGER). A room type's `name` is unique
+        regardless of case and of spaces at either end ("Deluxe" = " deluxe "): 409 when another
+        type already has it (V138 adds the matching unique index).
       requestBody:
         required: true
         content:
@@ -987,6 +990,12 @@ paths:
                 $ref: "#/components/schemas/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Another room type already has this name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
 
   /rooms/{id}:
     parameters:
@@ -1023,7 +1032,10 @@ paths:
       operationId: updateRoom
       tags: [Rooms]
       summary: Update a room
-      description: Requires any authenticated staff session (ADMIN or MANAGER). Full replacement of all `roomSchema` fields (no partial update).
+      description: >
+        Requires any authenticated staff session (ADMIN or MANAGER). Full replacement of all
+        `roomSchema` fields (no partial update). The `name` rule of `POST /rooms` applies (the
+        type's own current name is of course fine).
       requestBody:
         required: true
         content:
@@ -1053,6 +1065,12 @@ paths:
                 $ref: "#/components/schemas/ErrorMessage"
               example:
                 error: Room not found
+        "409":
+          description: Another room type already has this name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
     delete:
       operationId: deleteRoom
       tags: [Rooms]
@@ -2018,12 +2036,14 @@ paths:
         function half is not expressed as a role check: `FUNCTION_ENGINEER` is its own authority,
         unrelated to `RoleHierarchy` (see `SecurityConfig#roleHierarchy`'s own note on this).
         Forward-only - skipping `IN_PROGRESS` is allowed, going backward or repeating the current
-        status is not. Transitioning to `DONE`, when this task has a block, moves that block's
-        `toDate` to yesterday (today is still covered by an inclusive `toDate`, so the room must
-        not return to sale until the day after it's actually fixed) - or deletes the block
-        outright if yesterday is before the block's own `fromDate` (created and fixed the same
-        day, so it never covered a usable night). If the block was already removed by other means,
-        closing succeeds and touches no block.
+        status is not. Transitioning to `DONE`, when this task has a block, only ever shortens
+        that block: its `toDate` becomes `min(current toDate, yesterday)` (today is still covered
+        by an inclusive `toDate`, so the room must not return to sale until the day after it's
+        actually fixed) - never later than it already was, so closing a task whose block has
+        already expired (5-9 Oct, closed on the 11th) leaves it at 9 Oct. The block is deleted
+        outright if that date is before the block's own `fromDate` (created and fixed the same
+        day, or not started yet, so it never covered a usable night). If the block was already
+        removed by other means, closing succeeds and touches no block.
       requestBody:
         required: true
         content:
@@ -2206,6 +2226,9 @@ paths:
       tags: [Bookings]
       summary: Create a booking (public — guest-facing, no session required)
       description: >
+        Public limits, all 400: `checkIn` can't be in the past, a stay is at most 90 nights, and
+        adults + children can't exceed the room type's `capacity`.
+
         Intentionally unauthenticated: guests are not logged in. The server
         recomputes `totalPrice` from `Room.basePrice`/`RatePlan` and
         re-validates availability itself inside a `Serializable` transaction
@@ -2297,6 +2320,15 @@ paths:
         of `channel`/`purpose`/`adults`/`children` is independent: omitted leaves it as it is,
         present sets it. Sends a guest-facing status-change email when the status actually changes
         to PAID or CANCELLED - never for a request that only touches the other fields.
+
+        A guest who has arrived is not cancelled: a change into `CANCELLED` while `occupancyStatus`
+        is `CHECKED_IN` or `CHECKED_OUT` is a 409 (check the guest out, or shorten the stay, instead).
+        Re-sending `CANCELLED` to a booking that is already cancelled is not a change and stays allowed.
+
+        Cancelling also cleans up the guest's spa: every `BOOKED` spa appointment of the booking is
+        cancelled, and the still-unpaid spa lines on the orders linked to them are taken off (an
+        order left with no lines is cancelled). Anything already paid is left exactly as it is, and
+        the response then carries `Booking.warning` naming it, so staff can refund and cancel by hand.
       requestBody:
         required: true
         content:
@@ -2305,7 +2337,7 @@ paths:
               $ref: "#/components/schemas/BookingStatusInput"
       responses:
         "200":
-          description: Updated booking.
+          description: Updated booking (with `warning` set when a paid spa appointment was left untouched).
           content:
             application/json:
               schema:
@@ -2326,6 +2358,16 @@ paths:
                 $ref: "#/components/schemas/ErrorMessage"
               example:
                 error: Booking not found
+        "409":
+          description: >
+            A change into `PAID` while money is still owed and the request carries no payment (or
+            one for a different amount) - `BookingStatusInput.payment`. `PAID` never writes money
+            off on its own. Also: a change into `CANCELLED` for a booking that is `CHECKED_IN` or
+            `CHECKED_OUT`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
 
   /bookings/{id}/room-unit:
     parameters:
@@ -2520,9 +2562,11 @@ paths:
         already-frozen nightly rates, only `roomUnitId` moves.
 
         Both segments must already have a physical room assigned - swapping with nothing isn't a
-        swap, it's a single-sided assignment; use `PUT .../room-unit` for that. Writes one audit
-        entry under each booking's own id, naming the other guest, so each booking's own history
-        shows the move.
+        swap, it's a single-sided assignment; use `PUT .../room-unit` for that. Two segments that
+        are already in the *same* physical room are a 400 as well: exchanging a room with itself
+        changes nothing and would only leave a "Swapped rooms" entry in both histories. Writes one
+        audit entry under each booking's own id, naming the other guest, so each booking's own
+        history shows the move.
       requestBody:
         required: true
         content:
@@ -2629,6 +2673,10 @@ paths:
       tags: [Bookings]
       summary: Create a booking as staff (front-desk / walk-in), optionally assigning a room immediately
       description: >
+        Limits (see also `POST /bookings`): a stay is at most 90 nights (400). A booking that
+        starts before today is back-entry and needs MANAGER or above (a lower role gets 403). A
+        party larger than the room sleeps is accepted with `Booking.warning` set, not refused.
+
         Requires CASHIER or above. Distinct from the public `POST /bookings` guest-inquiry flow:
         no new-booking notification email is sent, guest email/phone are optional (a walk-in may
         not have one on hand), and if `roomUnitId` is given the room is assigned in the same
@@ -3259,8 +3307,9 @@ paths:
         Requires CASHIER or above. Only legal once a physical room is assigned
         (`booking.roomUnitId` - this is the moment a key is handed over) and while
         `occupancyStatus` is `EXPECTED` or `NO_SHOW` (a guest who no-showed can still turn up
-        late and check in normally). Checking into a `DIRTY` room is allowed, not blocked - see
-        `CheckInResult.warning`. Recorded in the audit log.
+        late and check in normally). A `CANCELLED` booking cannot be checked in, and neither can
+        one before its `checkIn` date (the hotel's today) - both 409. Checking into a `DIRTY` room
+        is allowed, not blocked - see `CheckInResult.warning`. Recorded in the audit log.
       responses:
         "200":
           description: Checked in, with a warning set if the room wasn't clean.
@@ -3287,7 +3336,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
         "409":
-          description: Already checked in or already checked out.
+          description: Already checked in or already checked out, the booking is `CANCELLED`, or its check-in date has not arrived yet.
           content:
             application/json:
               schema:
@@ -3311,6 +3360,18 @@ paths:
         booking's current room `DIRTY` (`PATCH /room-units/{id}/housekeeping` is the way to mark
         it cleaned again) and reports any outstanding balance - see `CheckOutResult`. Recorded in
         the audit log.
+
+
+        An early checkout (before `checkOut`) can also shorten the stay to the day the guest
+        actually left - see `CheckOutInput`, and `GET /bookings/{id}/check-out/preview` for what
+        that would release and cost. Without a body (or with `shortenStay: false`) the dates and
+        price are left exactly as they were.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckOutInput"
       responses:
         "200":
           description: Checked out, with the outstanding balance (if any) at the moment of checkout.
@@ -3329,13 +3390,47 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
         "409":
-          description: This booking was never checked in, or is already checked out.
+          description: >
+            This booking was never checked in, or is already checked out, or `shortenStay` was
+            asked for but the stay can't be shortened that way (see `CheckOutPreview.reason`).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
               example:
                 error: "This booking hasn't been checked in."
+
+  /bookings/{id}/check-out/preview:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: previewBookingCheckOut
+      tags: [Bookings]
+      summary: What checking this guest out today would release and cost
+      description: >
+        Requires CASHIER or above - the same floor as `POST /bookings/{id}/check-out`, which this
+        prepares. Writes nothing. See `CheckOutPreview`.
+      responses:
+        "200":
+          description: The preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckOutPreview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenCashierPlus"
+        "404":
+          description: Booking not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
 
   /bookings/{id}/no-show:
     parameters:
@@ -3388,11 +3483,11 @@ paths:
     get:
       operationId: getBookingFolio
       tags: [Bookings]
-      summary: Get the total amount owed against a booking's room folio
+      summary: Get what a booking has been charged, paid, and still owes
       description: >
-        Requires any authenticated staff session. `roomTotal` + `roomChargesTotal` = `folioTotal`
-        - built on the same `BookingService` query `GET /bookings/{id}/pos-orders` itemizes (see
-        that operation), just totaled instead of broken out per order.
+        Requires any authenticated staff session. See `BookingFolio` - `balanceDue` there is the
+        one figure for "how much to collect", the same number `CheckOutResult`,
+        `TodayBoardEntry` and the property map report as `outstandingBalance`.
       responses:
         "200":
           description: The booking's folio total.
@@ -3447,9 +3542,12 @@ paths:
       tags: [Bookings]
       summary: Record money collected against a booking's folio
       description: >
-        Requires CASHIER or above. See `FolioPayment`'s own description for what this does and
-        deliberately does not do (no shift/cash-drawer linkage). Not tied to `occupancyStatus`
-        in any way - collectible any time, not just at check-out.
+        Requires CASHIER or above. See `FolioPayment`'s own description. Takes any amount up to
+        `BookingFolio.balanceDue` - room and POS charges alike. When the payment leaves the room
+        part fully covered and the booking is `NEW` or `CONFIRMED`, the booking becomes `PAID` in
+        the same transaction (same ledger posting, email and audit entry as
+        `PATCH /bookings/{id}` to `PAID`). Not tied to `occupancyStatus` in any way - collectible
+        any time, not just at check-out.
       requestBody:
         required: true
         content:
@@ -4008,6 +4106,13 @@ paths:
         slot - enforced by a database exclusion constraint on each axis, not a check-then-write;
         a genuine race (two receptionists booking the same therapist at once) surfaces as 409 on
         whichever request loses, not a 500 or a silent double-booking.
+
+        Checked by the server, not left to the screen (and again by `PATCH /spa-appointments/{id}/schedule`):
+        the therapist must be active and hold the `THERAPIST` job function; the table must be in the
+        `SPA` zone (a restaurant table is refused); and the booking must be one the spa can serve on
+        that date - `CHECKED_IN`, or not yet arrived (`NEW`/`CONFIRMED`/`PAID`, not cancelled) with a
+        stay that covers `date` (`checkIn <= date <= checkOut`). A guest who has checked out, a
+        cancelled booking, and a not-yet-arrived booking for other dates are refused.
       requestBody:
         required: true
         content:
@@ -4022,7 +4127,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/SpaAppointmentResult"
         "400":
-          description: Body failed validation, `treatmentMenuItemId` isn't a `SPA`-department item with a duration, or `startTime` falls outside opening hours / off the half-hour grid.
+          description: Body failed validation, `treatmentMenuItemId` isn't a `SPA`-department item with a duration, `startTime` falls outside opening hours / off the half-hour grid, the therapist is inactive or not a `THERAPIST`, the table isn't a `SPA`-zone table, or a not-yet-arrived booking's stay doesn't cover `date`.
           content:
             application/json:
               schema:
@@ -4038,7 +4143,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
         "409":
-          description: The table or the therapist already has an overlapping BOOKED appointment.
+          description: The table or the therapist already has an overlapping BOOKED appointment, or the booking is cancelled or already checked out.
           content:
             application/json:
               schema:
@@ -4141,6 +4246,10 @@ paths:
         as they do for a fresh booking. Both apply to this update exactly as they apply to an
         insert; the 409 on a lost race is the same message `POST /spa-appointments` already
         gives, not a new one.
+
+        The same server-side checks as `POST /spa-appointments` run against the new values: the
+        therapist must be active with the `THERAPIST` job function, the table must be a `SPA`-zone
+        table, and the appointment's booking must still be servable on the new `date`.
       requestBody:
         required: true
         content:
@@ -4155,7 +4264,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/SpaAppointment"
         "400":
-          description: '`startTime` isn''t on a slot boundary, the treatment would run past closing, or the appointment isn''t `BOOKED`.'
+          description: '`startTime` isn''t on a slot boundary, the treatment would run past closing, the appointment isn''t `BOOKED`, the therapist is inactive or not a `THERAPIST`, the table isn''t a `SPA`-zone table, or a not-yet-arrived booking''s stay doesn''t cover the new `date`.'
           content:
             application/json:
               schema:
@@ -4171,7 +4280,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
         "409":
-          description: This table or this therapist already has an appointment overlapping the requested time.
+          description: This table or this therapist already has an appointment overlapping the requested time, or the booking is cancelled or already checked out.
           content:
             application/json:
               schema:
@@ -4336,7 +4445,9 @@ paths:
         (unlike adding) can only shrink the appointment's maintained `durationMinutes`, which can
         never create a new overlap, so this never risks a 409 and is allowed even on a
         `COMPLETED` row to correct an over-count. Refused (400) if this is the appointment's only
-        remaining treatment - an appointment cannot exist with zero; cancel it instead.
+        remaining treatment - an appointment cannot exist with zero; cancel it instead. Refused
+        (409) once the appointment's linked order is `PAID`: a treatment that was paid for is not
+        taken off the record afterwards (refund through the order instead).
       responses:
         "200":
           description: Updated appointment, with the treatment removed.
@@ -4356,6 +4467,58 @@ paths:
           $ref: "#/components/responses/ForbiddenCashierPlus"
         "404":
           description: Appointment not found, or treatmentId does not belong to this appointment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "409":
+          description: The appointment's linked order is already paid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /spa-appointments/{id}/bill-missing-treatments:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: billMissingSpaTreatments
+      tags: [Spa]
+      summary: Add the treatments the linked order does not carry to that same order
+      description: >
+        Requires CASHIER or above. For a `COMPLETED` appointment whose linked order (`orderId`)
+        does not cover every treatment (`missingTreatmentNames` is not empty): adds exactly the
+        missing quantity of each treatment to that same order, in one action and one transaction,
+        through the ordinary order path (`POST /orders/{id}/items`) - so the price is the menu's
+        live price at this moment, like every other POS line. Nothing is charged here; the order is
+        then closed as usual. Returns the appointment with its refreshed `missingTreatmentNames`
+        (empty now).
+
+        409 when the appointment is not `COMPLETED`, has no linked order, the linked order is
+        `PAID` or `CANCELLED` (a closed order can't take lines), or nothing is missing.
+      responses:
+        "200":
+          description: The appointment after the missing treatments were added to its order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpaAppointment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenCashierPlus"
+        "404":
+          description: Appointment not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "409":
+          description: See above - the appointment or its order is not in a state that can take the missing treatments.
           content:
             application/json:
               schema:
@@ -5264,6 +5427,11 @@ paths:
         `Shift` (409 otherwise). Creates a `Payment` row for `Order.total`/`method` (and
         `bookingId` when `method` is `ROOM_CHARGE`) tied to that shift, then sets the order's
         status to `PAID`. The amount charged is always `Order.total` - see `CloseOrderInput`.
+        A `ROOM_CHARGE` needs a guest in the house: the booking must be `CHECKED_IN` (409 before
+        arrival and after check-out; an overdue guest is still `CHECKED_IN`) and not `CANCELLED`.
+        Any line still unsent (`sentAt: null`) is sent to the kitchen/bar first, exactly as
+        the `OPEN -> SENT` transition does - paying is the last chance for an item nobody
+        pressed "Send" for to reach the station; lines already sent are never reprinted.
       requestBody:
         required: true
         content:
@@ -5296,7 +5464,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
         "409":
-          description: Order already `PAID`/`CANCELLED`, caller has no open shift, or (for `ROOM_CHARGE`) the booking is `CANCELLED`.
+          description: >
+            Order already `PAID`/`CANCELLED`, caller has no open shift, or (for `ROOM_CHARGE`) the
+            booking is `CANCELLED` or not `CHECKED_IN`.
           content:
             application/json:
               schema:
@@ -5390,7 +5560,21 @@ paths:
       operationId: cancelOrder
       tags: [Orders]
       summary: Cancel an order
-      description: Requires role `WAITER` or above. No payment is created.
+      description: >
+        Requires role `WAITER` or above for an `OPEN` order (nothing has reached the kitchen/bar
+        yet). A `SENT` order has lines on paper at a station, so cancelling it whole is a void like
+        voiding one sent line (`POST /orders/{id}/items/{itemId}/void`): `MANAGER` or above (403
+        otherwise) and a `reason` (400 without one). Every sent line is recorded as an
+        `OrderItemVoid` on `Order.voids` and leaves `items` (so `total` is 0), lines that were
+        never sent are simply dropped, a VOID ticket goes to each line's station, and the audit
+        entry carries the reason. No payment is created. The rule is enforced here, not only by
+        the screens.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderCancelInput"
       responses:
         "200":
           description: Cancelled order (status `CANCELLED`).
@@ -5398,8 +5582,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Order"
+        "400":
+          description: Cancelling a `SENT` order without a `reason`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationError"
+                  - $ref: "#/components/schemas/ErrorMessage"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: The order is `SENT` and the caller is below `MANAGER`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+              example:
+                error: A manager has to cancel an order that was already sent
         "404":
           description: Order not found.
           content:
@@ -5516,11 +5716,10 @@ paths:
                 error: Shift not found
         "409":
           description: >
-            Already `CLOSED`, or there are `OPEN`/`SENT` orders anywhere in the system. This is
-            a system-wide gate, not scoped to this particular shift - `Order` has no `shiftId`
-            (only `Payment` does, and only once an order is closed), so there is no way to ask
-            "orders opened during this shift" and the check intentionally doesn't pretend
-            otherwise.
+            Already `CLOSED`, or this shift still has `OPEN`/`SENT` orders that belong to it: opened by
+            the shift's own cashier, or carrying a payment recorded in this shift. Other staff's open
+            orders do not block the close; they come back as `Shift.warning`. Empty `OPEN` orders are
+            cancelled automatically, on the audit record.
           content:
             application/json:
               schema:
@@ -5762,21 +5961,21 @@ paths:
         range.
 
 
-        **Room-rate revenue is not in any total.** This system has no payment record for the room
-        itself. The only sign that a stay was paid for is `Booking.status = PAID`, which has no
-        date, method or amount-paid of its own. The workbook therefore totals exactly two
-        channels, and says so on its Summary sheet:
+        **Room money is in the totals only when it was taken at the desk.** A room paid through the
+        folio (`POST /bookings/{id}/folio-payments` takes the room as well as POS charges) is a
+        `FolioPayment` like any other. A booking marked `PAID` by hand - an OTA prepayment, a bank
+        transfer - has no date, method or amount of its own and is in no total. The workbook
+        therefore totals exactly two channels, and says so on its Summary sheet:
 
         - **POS payments received**: `Payment` rows with method `CASH`, `CARD` or `OTHER`.
           `ROOM_CHARGE` payments are shown in their own column but never added to any total.
           Closing an order to a room collects no money, it moves the amount onto the booking's
           folio (see `GET /payments/summary`).
 
-        - **Room charges settled**: `FolioPayment` rows, i.e. money collected at the desk against
-          room-charged POS orders (see `POST /bookings/{id}/folio-payments`). This is where a
-          room-charged order's money is counted, once, when it is actually collected. It never
-          includes the room rate: a folio payment can't exceed the booking's outstanding room
-          charges.
+        - **Room charges settled** (the column keeps its old name): `FolioPayment` rows, i.e. money
+          collected at the desk against a booking - room-charged POS orders and, since folio
+          payments can cover it, the room itself. This is where a room-charged order's money is
+          counted, once, when it is actually collected.
 
 
         Four sheets. "Summary": one row per day in the range (days with nothing collected
@@ -6889,6 +7088,12 @@ paths:
         date shows what is still unresolved with a date on or before it, not a historical snapshot.
 
 
+        **`unpaidBalances`**: bookings whose stay is over - `occupancyStatus` `CHECKED_OUT`, or
+        `checkOut` on or before `date` and not still checked in, or `status` `CANCELLED` - that
+        still owe money (`balanceDue` above zero), whatever their `status`. Each row carries
+        `balanceDue`, the folio's single balance.
+
+
         **`snapshot`** is exactly `GET /reports/occupancy?from=date&to=date`'s `total` row - the
         same computation, called, not reimplemented.
       parameters:
@@ -7009,6 +7214,198 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/ValidationError"
                   - $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /settings/print-layouts:
+    get:
+      operationId: getPrintLayouts
+      tags: [Settings]
+      summary: Read how every printed document looks
+      description: >
+        Requires `ADMIN`, like every `/settings/*` route. One layout per document (guest receipt,
+        pre-bill, kitchen ticket, bar ticket, Z-report) plus whether the shared logo is uploaded.
+        See `PrintLayout`.
+      responses:
+        "200":
+          description: All five layouts, in the order receipt, pre-bill, kitchen, bar, Z-report.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrintLayouts"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /settings/print-layouts/logo:
+    put:
+      operationId: uploadPrintLogo
+      tags: [Settings]
+      summary: Upload (or replace) the logo printed on the receipt and pre-bill
+      description: >
+        Requires `ADMIN`. A JPEG or PNG (content-sniffed, 8MB cap - `ImageUploadValidator`; WebP
+        is accepted elsewhere in the app but the JVM here has no WebP decoder, so it is a 400).
+        It is flattened onto white, converted to gray and scaled down to at most 576 dots wide
+        and 400 dots high - the most any receipt printer here can use - and stored in that
+        form; the printed bitmap is derived from it at the paper width and `logoWidthPercent` of
+        the layout printing it, dithered to pure black and white. Does not change any `showLogo`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required: [file]
+      responses:
+        "200":
+          description: The layouts, now with `hasLogo` true.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrintLayouts"
+        "400":
+          description: Not a JPEG/PNG, too large, or not decodable as an image.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    delete:
+      operationId: deletePrintLogo
+      tags: [Settings]
+      summary: Remove the logo
+      description: Requires `ADMIN`. Also turns `showLogo` off on every layout. Removing a logo that isn't there is not an error.
+      responses:
+        "200":
+          description: The layouts, now with `hasLogo` false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrintLayouts"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /settings/print-layouts/{documentType}:
+    put:
+      operationId: updatePrintLayout
+      tags: [Settings]
+      summary: Change how one printed document looks
+      description: >
+        Requires `ADMIN`. Takes effect on the next such document printed; jobs already queued keep
+        the bytes they were built with (a print job replays its payload). A field the document
+        doesn't use (a VAT line on a kitchen ticket) is stored but has no effect. Recorded in the
+        audit log (`RECEIPT_SETTINGS_UPDATED`, the name predates the other documents) naming the
+        document and the fields that changed; an unchanged PUT records nothing.
+      parameters:
+        - name: documentType
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/PrintLayoutDocument"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrintLayoutInput"
+      responses:
+        "200":
+          description: The saved layout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrintLayout"
+        "400":
+          description: The title is empty or over 24 characters, header/footer text has more than 6 lines or a line over 48 characters, or a size/percentage is out of range.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /settings/print-layouts/{documentType}/preview:
+    post:
+      operationId: previewPrintLayout
+      tags: [Settings]
+      summary: Render a sample document from a layout that is not saved yet
+      description: >
+        Requires `ADMIN`. Renders a fixed sample (a receipt or pre-bill with two lines, VAT and a
+        cash payment; a ticket with two items and a note; a Z-report with sample figures) with the
+        layout in the body and the stored logo, and returns the lines exactly as the printer would
+        lay them out - the same code that builds the real document's bytes produces this, so what
+        wraps, truncates or fits in the printer's columns here is what happens on paper. Every
+        sample ends with a "sample" line so a test print is never mistaken for a real order.
+        Nothing is saved and nothing is printed.
+      parameters:
+        - name: documentType
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/PrintLayoutDocument"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrintLayoutInput"
+      responses:
+        "200":
+          description: The rendered sample.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrintLayoutPreview"
+        "400":
+          description: Same validation as `PUT /settings/print-layouts/{documentType}`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /settings/print-layouts/{documentType}/test-print:
+    post:
+      operationId: testPrintLayout
+      tags: [Settings]
+      summary: Print a sample of one document with its saved layout
+      description: >
+        Requires `ADMIN`. The only way to see the real thing - paper width, density and the logo
+        bitmap depend on the printer. Prints the same sample as the preview using the *saved*
+        layout, on the printer of the department that document goes to (kitchen ticket: KITCHEN,
+        bar ticket: BAR, everything else: CASHIER), through the normal print queue so it appears
+        under print jobs and retries like any other. `attempted` is false when that department has
+        no active printer.
+      parameters:
+        - name: documentType
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/PrintLayoutDocument"
+      responses:
+        "201":
+          description: The print attempt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrintAttemptResult"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -7972,6 +8369,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GuestOrderView"
+        "400":
+          description: >
+            A line is not on the public menu (`GET /public/menu`: hidden/unavailable items and spa
+            treatments are refused, and one bad line refuses the whole request), or a quantity is
+            outside 1..99 (also when it would take a merged line above 99).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
         "404":
           description: Wrong/missing token, unknown order, or the order is no longer OPEN/SENT.
           content:
@@ -8100,6 +8506,12 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/ForbiddenManagerPlus"
+        "409":
+          description: A version of this `(staffArea, code)` already starts on `effectiveFrom` (one version per start date). Use `POST /shift-codes/{id}/versions` to change it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
 
   /shift-codes/{id}/versions:
     parameters:
@@ -8111,24 +8523,32 @@ paths:
     post:
       operationId: createShiftCodeVersion
       tags: [Roster]
-      summary: Edit an existing shift code - saved as a new version effective today
+      summary: Edit an existing shift code - saved as a new version, effective today unless a date is given
       description: >
         Requires MANAGER or above, same as `POST /shift-codes`. The edit action on the shift-code
         screen: `id` is the code's current (active) version; `staffArea` and `code` stay as they
         are, every other term (hours, `countsAsWorked`, `isPaid`, `kind`, `displayColor`) comes from
         the body. Not an in-place edit - same versioning as `POST /shift-codes`: the current row is
-        retired and a new one takes over, `effectiveFrom` = today in the hotel's own zone.
+        retired and a new one takes over, starting on the body's `effectiveFrom` (today in the
+        hotel's own zone when omitted). The date may be in the past or the future, but not before
+        the code's first version (400) and not before the current version's own start (409 - the
+        edit only ever extends the end of the history, it doesn't insert into its middle).
 
-        Unlike `POST /shift-codes`, existing roster entries follow the edit from today on: every
-        `RosterEntry` dated today or later that points at any version of this `(staffArea, code)`
+        Unlike `POST /shift-codes`, existing roster entries follow the edit from `effectiveFrom`
+        on: every `RosterEntry` dated that day or later that points at any version of this
+        `(staffArea, code)`
         is moved to the new version, and so is every `EmployeePattern.defaultShiftCode` pointing at
         one (a pattern may only use an active code, and `POST /roster/generate` would otherwise keep
-        stamping the retired one). Entries dated before today keep the version they had, so
-        coverage, totals and the actuals export for past days still read the old terms.
+        stamping the retired one). Entries dated before `effectiveFrom` keep the version they had, so
+        coverage, totals and the actuals export for those days still read the old terms. A past
+        `effectiveFrom` therefore recalculates the days from it up to today.
 
-        Editing the same code a second time on the same day amends today's version in place rather
-        than creating a second one (two versions can't start on the same date), as long as no
-        entry dated before today points at it - otherwise 409.
+        An `effectiveFrom` equal to the current version's own start amends that version in place
+        rather than creating a second one (two versions can't start on the same date) - this is how
+        a same-day second edit, or a correction of an older version, works. Entries from that date
+        on read the new terms. Refused with 409 if an entry dated before `effectiveFrom` points at
+        the version, since it would change without being covered by the new date. A future
+        `effectiveFrom` still makes the new row the code's current one at once.
       requestBody:
         required: true
         content:
@@ -8143,7 +8563,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ShiftCode"
         "400":
-          description: An interval is malformed, or `kind` doesn't match the hours / `countsAsWorked` (e.g. `ABSENCE` that counts as worked).
+          description: An interval is malformed, `kind` doesn't match the hours / `countsAsWorked` (e.g. `ABSENCE` that counts as worked), or `effectiveFrom` is not a date or is before the code's first version.
           content:
             application/json:
               schema:
@@ -8160,8 +8580,9 @@ paths:
                 $ref: "#/components/schemas/ErrorMessage"
         "409":
           description: >
-            `id` is a retired version (edit the current one instead), or today's version is
-            already referenced by an entry dated before today.
+            `id` is a retired version (edit the current one instead), `effectiveFrom` is before the
+            current version's own start, or it equals that start and an entry dated before it
+            already points at the version.
           content:
             application/json:
               schema:
@@ -8521,7 +8942,11 @@ paths:
       operationId: createRosterEntry
       tags: [Roster]
       summary: Assign a shift directly (fill a blank cell)
-      description: Requires MANAGER or above. Fails if the employee already has an entry that date.
+      description: >
+        Requires MANAGER or above. Fails if the employee already has an entry that date, or is
+        deactivated: no shift is ever assigned to a deactivated employee, by this call, the move/
+        reassign/swap gestures, the pattern generator or either Excel import (their earlier entries
+        stay and can still be removed).
       requestBody:
         required: true
         content:
@@ -8536,7 +8961,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/RosterEntry"
         "400":
-          description: This employee already has an entry on this date.
+          description: This employee already has an entry on this date, or is deactivated.
           content:
             application/json:
               schema:
@@ -8832,6 +9257,11 @@ paths:
       description: >
         Requires MANAGER or above. The raw stream, not paired sessions - see `AttendancePunch`'s
         own description for why a split shift's four punches need no special handling here.
+
+        Punches are never deleted or edited; a correction (`PUT /attendance/day`) *voids* the old
+        ones and records new ones. By default only the live (non-voided) punches are returned -
+        what every report counts. With `includeVoided=true` the voided ones come back too, each
+        carrying who voided it, when and why, so the history of a day can be shown.
       parameters:
         - name: employeeUserId
           in: query
@@ -8850,6 +9280,12 @@ paths:
           schema:
             type: string
             pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: includeVoided
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Every punch for this employee in the range, oldest first.
@@ -8893,6 +9329,58 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AttendancePunch"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenManagerPlus"
+        "404":
+          description: No such employee.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /attendance/day:
+    put:
+      operationId: correctAttendanceDay
+      tags: [Roster]
+      summary: Replace one employee's punches for one day, keeping the old ones as history
+      description: >
+        Requires MANAGER or above. The one way to fix a day: change a time, add or drop a punch,
+        clear the day, or roll it back to an earlier version (send that version's times again).
+        `times` is the complete list of the day's punches in the hotel's own zone (`HH:mm`, strictly
+        increasing); directions are not sent - they alternate `IN`, `OUT`, `IN`, ... in time order,
+        the same positional rule every report pairs by. An empty list clears the day.
+
+        Nothing is deleted or edited in place, so the correction can't be used to hide anything:
+        every live punch of that day is *voided* (it stays in the table, flagged with who voided
+        it, when, and the `reason`) and the new times are recorded as `MANUAL` punches carrying the
+        same `reason` and a shared `correctionId`. A scanner punch voided this way is never
+        re-ingested by the next poll. Voided punches count in no report, summary or today board.
+        A time later than now is refused, like `POST /attendance`. `reason` is required.
+        Sending the times the day already has is a 400 rather than an empty correction.
+        Audited as `ATTENDANCE_DAY_CORRECTED`, with the before and after times and the reason.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttendanceDayCorrectionInput"
+      responses:
+        "200":
+          description: The day's live punches after the correction, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AttendancePunch"
+        "400":
+          description: Missing reason, malformed or non-increasing times, a time in the future, or nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -9246,16 +9734,21 @@ paths:
       summary: Export a month's assigned vs. actual worked days and hours, as an Excel workbook
       description: >
         Requires MANAGER or above, the same floor as the rest of the roster module's write/export
-        surface. Two sheets. "Summary": one row per employee who either had a
-        `shiftCode.countsAsWorked` roster entry that month or at least one real `AttendancePunch`
-        that month (a punch with no matching entry is exactly the kind of anomaly this export
-        exists to surface, not drop) - Days assigned/Hours assigned are the plan (`OP` counts as a
+        surface. Lists the same people as `GET /roster/export` for the same month: every active
+        employee, plus anyone - deactivated or not - with a roster entry or a real
+        `AttendancePunch` that month (a punch with no matching entry is exactly the kind of anomaly
+        this export exists to surface, not drop). Two sheets. "Summary": one row per such employee
+        (zeros for someone who neither was scheduled nor punched) - Days assigned/Hours assigned are the plan (`OP` counts as a
         day with no fixed hours, `PH` doesn't count at all, same as before this export reported
         real attendance); Days present/Hours worked are real punches, paired consecutive IN/OUT
         per day the same way `GET /attendance/summary` does; Incomplete days counts days that
-        month with an odd punch count. "Arrivals & departures": one row per punch that month
-        across every employee in scope, sorted by employee then punch time - the raw log Summary's
-        totals are computed from, not pre-paired into sessions here. No money: the hotel's
+        month with an odd punch count. "Arrivals & departures": an employee x day matrix for the
+        month - each cell is that day's punches as IN-OUT pairs (`07:01-16:05`, several pairs on
+        separate lines, `IN-?` for an unpaired punch, a trailing `*` on a manually entered time) -
+        the same positional pairing Summary's totals are computed from. "Late & anomalies" is sorted by date, then employee, and never
+        reports a scheduled day as MISSED until that day is over, nor today's lone punch as
+        INCOMPLETE (that person is still in the house); the Summary's incomplete count follows the
+        same rule. No money: the hotel's
         accountant keeps pay calculation off-system (everyone is currently on a monthly salary
         held in a sheet this system has never seen, and there are no part-timers), so this export
         reports only the underlying facts and leaves the arithmetic where it already lives.
@@ -9293,7 +9786,8 @@ paths:
       description: >
         Requires ADMIN - stricter than the rest of this module's MANAGER floor, matching the
         Excel import's own floor (`/roster/import/**`), not the actuals export's. One row per
-        employee, grouped and ordered exactly as the on-screen grid (`RosterGrid.tsx`) renders it -
+        employee - every active one, plus anyone deactivated who still has an entry or a punch that
+        month, the same people `GET /roster/actuals-export` lists - grouped and ordered exactly as the on-screen grid (`RosterGrid.tsx`) renders it -
         by `StaffArea` in the fixed order Admin, Front Office, Maintenance, Housekeeping,
         Restaurant, Kitchen, then employees with no area set, alphabetically by name within each
         group; a group with nobody in it is left out entirely, same as on screen. One column per
@@ -10105,6 +10599,7 @@ components:
       properties:
         name:
           type: string
+          x-trim: true
           minLength: 2
           maxLength: 120
         department:
@@ -10146,9 +10641,10 @@ components:
           description: >
             Human-readable one-liner, e.g. "Kitchen ticket — Order #ab12cd34" or
             "Bar ticket — Order #ab12cd34" or, for a
-            `GUEST_RECEIPT`, "Guest receipt — Order #ab12cd34 (CARD)" /
-            "Guest receipt — Order #ab12cd34 (ROOM_CHARGE — Jane Doe)" - enough to tell two
-            receipts on the same order apart at a glance. Never carries a money amount.
+            `GUEST_RECEIPT`, "Guest receipt — Order #ab12cd34 (Card)" /
+            "Guest receipt — Order #ab12cd34 (Room charge — Jane Doe)" - the payment method in
+            words, never its enum value - enough to tell two receipts on the same order apart at
+            a glance. Never carries a money amount.
         status:
           $ref: "#/components/schemas/PrintJobStatus"
         attempts:
@@ -10292,14 +10788,85 @@ components:
           type: string
           nullable: true
 
+    CheckOutInput:
+      type: object
+      description: >
+        Optional body of `POST /bookings/{id}/check-out`. Only meaningful for an early checkout
+        (see `CheckOutPreview.early`); ignored otherwise.
+      properties:
+        shortenStay:
+          type: boolean
+          default: false
+          description: >
+            Move `checkOut` to `CheckOutPreview.shortenedCheckOut` through the ordinary schedule
+            change (`PATCH /bookings/{id}/schedule`'s own path), so the released nights are free
+            again on the calendar, in availability, the night audit and every report. Their frozen
+            rates are removed with them.
+        chargeUnusedNights:
+          type: boolean
+          default: false
+          description: >
+            With `shortenStay`: keep charging what the released nights were agreed at, as
+            `Booking.earlyDepartureFee` (added to any fee already there). Without it the guest is
+            charged only for the nights stayed. Staff decide this per checkout.
+
+    CheckOutPreview:
+      type: object
+      description: >
+        Response of `GET /bookings/{id}/check-out/preview`. `early` is true when today (hotel
+        date) is before `checkOut`. Shortening ends the stay today, but never before the first
+        night: a guest leaving on their arrival day is still charged one night, so a one-night
+        booking checked out on its arrival day is not early at all. `shortenable` is false (with
+        `reason`) when the stay can't be shortened through a schedule change - most often a
+        relocated stay whose last room starts after today; release those nights with the
+        relocation tools first.
+      required: [early, shortenable, reason, shortenedCheckOut, nightsReleased, unusedNightsAmount, currentRoomTotal, shortenedRoomTotal, outstandingBalance, shortenedOutstandingBalance]
+      properties:
+        early:
+          type: boolean
+        shortenable:
+          type: boolean
+        reason:
+          type: string
+          nullable: true
+        shortenedCheckOut:
+          type: string
+          format: date
+          nullable: true
+          description: The `checkOut` the stay would get. Null unless `early`.
+        nightsReleased:
+          type: integer
+        unusedNightsAmount:
+          type: string
+          description: >
+            Decimal(10,2) as a string - what the released nights were agreed at, i.e. the
+            early-departure fee `chargeUnusedNights` would add. `"0.00"` unless `shortenable`.
+        currentRoomTotal:
+          type: string
+          description: Decimal(10,2) as a string - `Booking.totalPrice` + `earlyDepartureFee` now.
+        shortenedRoomTotal:
+          type: string
+          description: >
+            Decimal(10,2) as a string - the room total after shortening without charging the
+            unused nights. Equals `currentRoomTotal` unless `shortenable`.
+        outstandingBalance:
+          type: string
+          description: Decimal(10,2) as a string - `BookingFolio.balanceDue` now, before any change.
+        shortenedOutstandingBalance:
+          type: string
+          description: >
+            Decimal(10,2) as a string - `BookingFolio.balanceDue` as it would be after shortening
+            without charging the unused nights (folio payments, POS charges and `PAID` applied
+            the same way). Charging them keeps the room total, so that choice's balance is
+            `outstandingBalance`. Equals `outstandingBalance` unless `shortenable`.
+
     CheckOutResult:
       type: object
       description: >
-        Response of `POST /bookings/{id}/check-out`. `outstandingBalance` is the same number
-        `GET /bookings/{id}/folio` would report at this instant (room total, if `status` isn't
-        yet `PAID`, plus any uncollected `ROOM_CHARGE` payments) - the last moment front desk can
-        act on it before the guest walks out. `"0.00"` means nothing is owed, not that the field
-        was skipped.
+        Response of `POST /bookings/{id}/check-out`. `outstandingBalance` is
+        `BookingFolio.balanceDue` at this instant (after any shortening the request asked for) -
+        the last moment front desk can act on it before the guest walks out. `"0.00"` means
+        nothing is owed, not that the field was skipped.
       required: [booking, outstandingBalance]
       properties:
         booking:
@@ -10452,6 +11019,7 @@ components:
       properties:
         name:
           type: string
+          x-trim: true
           minLength: 2
           maxLength: 120
         description:
@@ -10535,6 +11103,7 @@ components:
           type: string
         label:
           type: string
+          x-trim: true
           minLength: 1
           maxLength: 60
         isActive:
@@ -10548,6 +11117,7 @@ components:
       properties:
         label:
           type: string
+          x-trim: true
           minLength: 1
           maxLength: 60
         isActive:
@@ -10841,10 +11411,10 @@ components:
         function or being deactivated while holding future `BOOKED` appointments does not cascade
         to this row automatically - `PATCH /users/{id}/active` / `PATCH /users/{id}/functions`
         instead return a warning listing the affected future appointments, the same warn-don't-
-        block shape as `RoomUnitBlockResult`. Cancelling/shortening/early-checking-out the named
-        booking has no equivalent warning today - nothing in this system cascades a booking-date
-        change to this row, and no write path checks for an affected future appointment the way
-        the therapist-side paths do. That gap is real, not yet closed.
+        block shape as `RoomUnitBlockResult`. Cancelling the named booking, by contrast, does
+        cascade: its `BOOKED` appointments are cancelled (see `PATCH /bookings/{id}/status`).
+        Shortening or early-checking-out the booking still has no equivalent warning today -
+        nothing cascades a booking-date change to this row. That gap is real, not yet closed.
       required:
         [
           id,
@@ -11480,6 +12050,7 @@ components:
           minLength: 1
         guestName:
           type: string
+          x-trim: true
           minLength: 2
           maxLength: 120
         guestEmail:
@@ -11973,6 +12544,22 @@ components:
             system's rates, never taken from a staff or public request. The one exception is a
             booking imported from SiteMinder (`externalReference` set), whose price is the total
             the guest agreed on the OTA - see `POST /integrations/siteminder/reservations`.
+            The nights actually stayed only - see `earlyDepartureFee`.
+        earlyDepartureFee:
+          type: string
+          description: >
+            Decimal(10,2) rendered as a string, `"0.00"` unless an early checkout released nights
+            and staff chose to charge them anyway (`CheckOutInput.chargeUnusedNights`). Owed on
+            top of `totalPrice` - see `BookingFolio`.
+        balanceDue:
+          type: string
+          description: >
+            What the guest still owes on this booking right now - `BookingFolio.balanceDue`,
+            computed by the server in one place (`BookingFolioCalculator`) and sent on every
+            booking, whatever its `status` or `occupancyStatus`: a checked-out booking, a `NEW` one
+            whose dates have passed and a `CANCELLED` one with POS charges can all owe money.
+            Decimal(10,2) rendered as a string, never below `"0.00"`. A client shows its "Owes"
+            badge from this field and never works the balance out itself.
         status:
           $ref: "#/components/schemas/BookingStatus"
         channel:
@@ -12033,6 +12620,17 @@ components:
         updatedAt:
           type: string
           format: date-time
+        warning:
+          type: string
+          description: >
+            Present only on the response to `POST /bookings/staff`, `PATCH /bookings/{id}/status`
+            and `GET /bookings/{id}`, when front desk should look twice: on create, a party larger
+            than the room type sleeps (adults + children over `Room.capacity`; an extra bed is a real
+            thing staff do, so it warns, where the public `POST /bookings` refuses); on a cancelled
+            booking, a `BOOKED` spa appointment whose order is already paid, which the cancellation
+            left untouched (refund it and cancel the appointment by hand). Never stored: the
+            cancelled-booking warning is read fresh on each `GET /bookings/{id}`, so it goes away on
+            its own once the paid appointment is dealt with, and it is absent from lists.
 
     BookingCreateInput:
       type: object
@@ -12044,6 +12642,7 @@ components:
           minLength: 1
         guestName:
           type: string
+          x-trim: true
           minLength: 2
           maxLength: 120
         guestEmail:
@@ -12110,6 +12709,16 @@ components:
             `CANCELLED` (ignored otherwise); stored as `Booking.cancellationReason` and repeated in
             that status change's audit entry. Optional at the API so system paths (the SiteMinder import,
             the expiry sweep) keep working; the admin screens require it before they send a cancel.
+        payment:
+          allOf:
+            - $ref: "#/components/schemas/FolioPaymentInput"
+          description: >
+            The payment that settles the booking, recorded in the same transaction as the status
+            change. Read only on a change into `PAID`. A booking cannot become `PAID` while
+            `BookingFolio.balanceDue` (computed as if the booking were not yet paid) is above zero
+            unless this carries a payment of exactly that amount - otherwise 409. When nothing is
+            owed it is optional and, if sent, recorded like any folio payment (and rejected the
+            same way if it would overpay).
 
     Guest:
       type: object
@@ -12347,6 +12956,173 @@ components:
           minimum: 1
           maximum: 120
 
+    PrintLayoutDocument:
+      type: string
+      enum: [RECEIPT, PREBILL, KITCHEN_TICKET, BAR_TICKET, Z_REPORT]
+      description: >
+        The documents whose look is configurable. `RECEIPT` is the guest receipt (and its reprint,
+        titled with " - COPY" appended), `PREBILL` the pre-bill, `KITCHEN_TICKET` and `BAR_TICKET`
+        the order tickets (their void tickets use the same layout with the fixed title
+        "*** VOID ***"), `Z_REPORT` the shift-close report.
+
+    PrintPaperWidth:
+      type: string
+      enum: [MM58, MM80]
+      description: >
+        Roll width of the printer this document goes to. `MM80` prints 42 columns in Font A / 56
+        in Font B and a 576-dot logo; `MM58` prints 32 / 42 columns and a 384-dot logo.
+
+    PrintBodyFont:
+      type: string
+      enum: [A, B]
+      description: >
+        The printer's own built-in font for body text - A is the larger, B the smaller and denser.
+        A thermal printer has no arbitrary fonts: these two, magnified 1x or 2x and optionally
+        bold, are everything ESC/POS offers. (Thai text uses the printer's Thai code page, in
+        whichever of the two the printer renders it.)
+
+    PrintLayoutInput:
+      type: object
+      description: >
+        Body of `PUT /settings/print-layouts/{documentType}` and `.../preview` - every field of
+        `PrintLayout` except `documentType`/`updatedAt`. Which fields a document reads: all of them
+        read `paperWidth`, `bodyFont`, `title`, `titleSize`, `headerText`, `headerBold` and
+        `footerText`. The receipt and pre-bill also read `showLogo`/`logoWidthPercent` (no other
+        document prints the logo), `showVatLine`, `totalSize`, `totalBold`; the receipt alone reads
+        `showPaymentMethod`. The receipt, pre-bill and both tickets read `itemSize`, `showLocation`,
+        `locationSize`, `showOrderNumber`; the tickets alone read `showWaiter` and `showItemNotes`.
+        `showTime` is the "Time:" line (on the Z-report, the "Closed:" line). Headers and footers
+        are up to 6 lines of 48 characters, printed centred; a line longer than the paper's
+        columns is wrapped. Characters outside the printer's code page print as `?`.
+      required: [paperWidth, bodyFont, title, titleSize, headerText, headerBold, footerText, showLogo, logoWidthPercent, showTime, itemSize, showLocation, locationSize, showOrderNumber, showWaiter, showItemNotes, showVatLine, showPaymentMethod, totalSize, totalBold]
+      properties:
+        paperWidth:
+          $ref: "#/components/schemas/PrintPaperWidth"
+        bodyFont:
+          $ref: "#/components/schemas/PrintBodyFont"
+        title:
+          type: string
+          description: Printed bold and centred at the top. 1-24 characters.
+        titleSize:
+          type: integer
+          minimum: 1
+          maximum: 2
+          description: Glyph magnification - ESC/POS has only multiples of the base glyph, no point sizes.
+        headerText:
+          type: string
+          description: Under the logo, above the title - hotel name, address, phone, tax id. Newline-separated.
+        headerBold:
+          type: boolean
+        footerText:
+          type: string
+          description: Last lines, e.g. a thank-you or opening hours. Newline-separated.
+        showLogo:
+          type: boolean
+          description: Only has an effect on the receipt and pre-bill, and only when a logo is uploaded (`PrintLayouts.hasLogo`).
+        logoWidthPercent:
+          type: integer
+          minimum: 20
+          maximum: 100
+          description: Width of the printed logo as a share of the paper's dot width.
+        showTime:
+          type: boolean
+        itemSize:
+          type: integer
+          minimum: 1
+          maximum: 2
+          description: Magnification of the item lines (and their notes). 2 halves the columns an item name has.
+        showLocation:
+          type: boolean
+          description: The table / zone / takeaway line.
+        locationSize:
+          type: integer
+          minimum: 1
+          maximum: 2
+        showOrderNumber:
+          type: boolean
+        showWaiter:
+          type: boolean
+          description: Tickets only - who opened the order.
+        showItemNotes:
+          type: boolean
+          description: Tickets only - the "note:" line under an item.
+        showVatLine:
+          type: boolean
+          description: The "incl. VAT x%" line under the total - a breakdown of the total, never added to it.
+        showPaymentMethod:
+          type: boolean
+          description: The payment method / room-charge block on a paid receipt.
+        totalSize:
+          type: integer
+          minimum: 1
+          maximum: 2
+        totalBold:
+          type: boolean
+
+    PrintLayout:
+      description: >
+        How one printed document looks on paper. Seeded with what each document printed before
+        this existed - 80mm, Font A, bold centred title, no header/footer/logo, every optional
+        line on - so nothing changes until an admin edits it.
+      allOf:
+        - $ref: "#/components/schemas/PrintLayoutInput"
+        - type: object
+          required: [documentType, updatedAt]
+          properties:
+            documentType:
+              $ref: "#/components/schemas/PrintLayoutDocument"
+            updatedAt:
+              type: string
+              format: date-time
+
+    PrintLayouts:
+      type: object
+      required: [hasLogo, layouts]
+      properties:
+        hasLogo:
+          type: boolean
+        layouts:
+          type: array
+          items:
+            $ref: "#/components/schemas/PrintLayout"
+
+    PrintPreviewLine:
+      type: object
+      required: [text, center, bold, size, fontB]
+      properties:
+        text:
+          type: string
+        center:
+          type: boolean
+        bold:
+          type: boolean
+        size:
+          type: integer
+          description: 1 or 2 - the glyph magnification this line prints at.
+        fontB:
+          type: boolean
+          description: True when the line prints in the printer's smaller Font B.
+
+    PrintLayoutPreview:
+      type: object
+      description: >
+        A rendered sample document. `columns` is the line width in Font A/B characters at 1x for
+        the paper and font chosen; a 2x line holds half as many. `logoPngBase64` is the logo as
+        it will print - black and white, at its printed size in dots (`logoWidthDots` wide) -
+        and absent when there is no logo, `showLogo` is off or the document never prints it.
+      required: [columns, lines]
+      properties:
+        columns:
+          type: integer
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/PrintPreviewLine"
+        logoPngBase64:
+          type: string
+        logoWidthDots:
+          type: integer
+
     VatSettings:
       type: object
       description: >
@@ -12408,6 +13184,7 @@ components:
       properties:
         name:
           type: string
+          x-trim: true
           minLength: 1
           maxLength: 120
         email:
@@ -12455,6 +13232,7 @@ components:
       properties:
         name:
           type: string
+          x-trim: true
           minLength: 1
           maxLength: 120
         email:
@@ -12805,6 +13583,8 @@ components:
       properties:
         name:
           type: string
+          x-trim: true
+          maxLength: 120
           minLength: 1
         fullName:
           type: string
@@ -12904,6 +13684,8 @@ components:
       properties:
         name:
           type: string
+          x-trim: true
+          maxLength: 120
           minLength: 1
 
     UserFullNameUpdateInput:
@@ -13154,6 +13936,7 @@ components:
       properties:
         name:
           type: string
+          x-trim: true
           minLength: 2
           maxLength: 120
         description:
@@ -13234,6 +14017,7 @@ components:
           $ref: "#/components/schemas/Zone"
         label:
           type: string
+          x-trim: true
           minLength: 1
           maxLength: 60
         capacity:
@@ -13491,6 +14275,16 @@ components:
           maxLength: 500
           description: Required - recorded on the void and in the audit log.
 
+    OrderCancelInput:
+      type: object
+      description: Optional body of `POST /orders/{id}/cancel`; `reason` is required only when the order is `SENT`.
+      properties:
+        reason:
+          type: string
+          nullable: true
+          maxLength: 500
+          description: Recorded on every void the cancellation creates and in the audit log.
+
     OrderCreateInput:
       type: object
       description: At least one of `tableId`/`bookingId`/`guestName` is expected in practice (an order with none of them is a valid but untraceable tab), but this isn't enforced server-side — same "trust the caller on shape, not on price" spirit as elsewhere.
@@ -13519,7 +14313,11 @@ components:
             them. The POS screens send the first line here instead of creating the order when a
             table is tapped: an order only comes into existence with something on it, so opening a
             free table and walking away leaves no empty order behind and the table stays free.
-            Optional - the spa billing door and room service still create first and add after.
+            Optional only for the spa billing door (which sends `spaAppointmentId`) and room service
+            (a booking, no table), which still create first and add after. An order for a
+            restaurant, bar or other non-spa table (`tableId` set) must come with at least one item
+            here - an empty one only holds the table busy - and is a 400 otherwise. A spa-zone table
+            is exempt, for the same create-first reason as the spa door.
         spaAppointmentId:
           type: string
           nullable: true
@@ -13596,6 +14394,9 @@ components:
         quantity:
           type: integer
           minimum: 1
+          maximum: 99
+          description: >
+            1 to 99 per line. A request that would take a merged line above 99 is a 400 too.
         note:
           type: string
           nullable: true
@@ -13744,6 +14545,12 @@ components:
         notes:
           type: string
           nullable: true
+        warning:
+          type: string
+          description: >
+            Set only on the response to `POST /shifts/{id}/close`, and only when OPEN/SENT orders
+            that belong to someone else were left open (they do not block this close). Names them.
+            Absent otherwise.
 
     ShiftOpenInput:
       type: object
@@ -13765,7 +14572,13 @@ components:
 
     ShiftTotals:
       type: object
-      description: Sum of this shift's `Payment.amount`, broken out by method — CASH/CARD/OTHER only; ROOM_CHARGE payments settle against the room folio, not this shift's cash/card reconciliation, so they're reported separately as `roomCharge`.
+      description: >
+        Sum of this shift's `Payment.amount`, broken out by method — CASH/CARD/OTHER only;
+        ROOM_CHARGE payments settle against the room folio, not this shift's cash/card
+        reconciliation, so they're reported separately as `roomCharge`. `folioCash`/`folioCard`/
+        `folioOther` (shift reads only, absent from `GET /payments/summary`) are the `FolioPayment`s recorded during this shift (their `shiftId`) - money
+        taken at reception against a booking, kept apart from POS sales. Expected cash is
+        `openingCashFloat` + `cash` + `folioCash`.
       required: [cash, card, roomCharge, other, paymentCount]
       properties:
         cash:
@@ -13782,6 +14595,15 @@ components:
           description: Decimal(10,2) rendered as a string.
         paymentCount:
           type: integer
+        folioCash:
+          type: string
+          description: Decimal(10,2) rendered as a string.
+        folioCard:
+          type: string
+          description: Decimal(10,2) rendered as a string.
+        folioOther:
+          type: string
+          description: Decimal(10,2) rendered as a string.
 
     ShiftSummary:
       type: object
@@ -13835,7 +14657,7 @@ components:
         ids against `GET /users`) and the reconciliation numbers themselves,
         `expectedCash`/`discrepancy` - the same arithmetic as the printed Z-report and the CSV
         export (`ShiftService`): `expectedCash` = `openingCashFloat` (0 if unset) + this shift's
-        cash payments; `discrepancy` = `closingCashCounted` - `expectedCash`, positive meaning
+        cash payments + its cash folio payments; `discrepancy` = `closingCashCounted` - `expectedCash`, positive meaning
         more cash counted than expected, negative meaning less. `discrepancy` is `null` exactly
         when `closingCashCounted` is - an open or never-recounted shift has nothing to compare.
       required:
@@ -13924,40 +14746,71 @@ components:
     BookingFolio:
       type: object
       description: >
-        `folioTotal` = `roomTotal` + `roomChargesTotal`, computed on the fly by
-        `BookingService.computeFolio`/`getFolio` - see that method's Javadoc. Never stored.
-        `roomChargesTotal` is *net of settlement* - what's actually still owed, not the raw sum
-        of every ROOM_CHARGE `Payment` this stay ever generated. See `FolioPayment`'s own
-        description for how a charge gets marked collected; `GET /bookings/{id}/folio-payments`
-        lists the settlement history behind this number.
-      required: [roomTotal, roomChargesTotal, folioTotal, roomChargeCount]
+        What a booking has been charged, what has been collected, and what is still owed -
+        computed on the fly by `BookingService` (`computeFolioBreakdown`), never stored. The one
+        place "how much does this guest owe" is answered; `outstandingBalance` everywhere else
+        is `balanceDue` here.
+
+
+        Charged: `roomTotal` (the nights stayed) + `earlyDepartureFee` + `roomChargesGross` (POS
+        orders charged to the room) = `folioTotal`. Collected: `paidTotal` (every
+        `FolioPayment`), applied to the POS charges first and then to the room, plus
+        `settledOutside` - the room amount not covered by folio payments on a booking marked
+        `PAID` by hand (prepaid on an OTA, bank transfer: collected, just not through this
+        system). `balanceDue` = `folioTotal` - `paidTotal` - `settledOutside`, never below zero;
+        `creditBalance` is what was collected beyond `folioTotal` (a stay shortened after it was
+        paid), which this system has no refund record for. A `CANCELLED` booking owes nothing
+        for the room - `roomTotal` and `earlyDepartureFee` still show what it was priced at, but
+        neither counts in `folioTotal`.
+      required: [roomTotal, earlyDepartureFee, roomChargesGross, roomChargesTotal, folioTotal, paidTotal, settledOutside, balanceDue, creditBalance, roomChargeCount]
       properties:
         roomTotal:
           type: string
+          description: "`Booking.totalPrice` - decimal(10,2) rendered as a string."
+        earlyDepartureFee:
+          type: string
+          description: "`Booking.earlyDepartureFee` - decimal(10,2) rendered as a string."
+        roomChargesGross:
+          type: string
           description: >
-            `Booking.totalPrice` - decimal(10,2) rendered as a string. Always the full room
-            total regardless of `status` - unlike `CheckOutResult`/`TodayBoardEntry`'s
-            `outstandingBalance` (see `BookingService.computeOutstandingBalance`), which drops
-            this once `status` is `PAID`. `folioTotal` here is "what this stay adds up to," not
-            "what's still owed" - use `outstandingBalance` for that.
+            Sum of this booking's ROOM_CHARGE `Payment.amount` rows - decimal(10,2) rendered as a
+            string.
         roomChargesTotal:
           type: string
           description: >
-            Sum of this booking's ROOM_CHARGE `Payment.amount` rows, minus every `FolioPayment`
-            recorded against it (floored at zero) - decimal(10,2) rendered as a string.
+            The POS room charges still uncollected: `roomChargesGross` minus the folio payments
+            applied to them (payments go to POS charges first) - decimal(10,2) rendered as a
+            string. What the "owes for POS charges" hints on a `PAID` booking read.
         folioTotal:
           type: string
+          description: Everything charged (see the schema description) - decimal(10,2) rendered as a string.
+        paidTotal:
+          type: string
+          description: Sum of every `FolioPayment` - decimal(10,2) rendered as a string.
+        settledOutside:
+          type: string
+          description: See the schema description - decimal(10,2) rendered as a string.
+        balanceDue:
+          type: string
+          description: What is still to collect - decimal(10,2) rendered as a string.
+        amountToMarkPaid:
+          type: string
           description: >
-            `roomTotal` + `roomChargesTotal` - decimal(10,2) rendered as a string. Not the same
-            question as `outstandingBalance` (see `roomTotal`'s own description) - this always
-            includes the full room total, `outstandingBalance` drops it once `status` is `PAID`.
+            The payment a change into `PAID` must carry (`BookingStatusInput.payment`): the balance
+            as if the booking were not yet paid and not cancelled - the room (also for a `CANCELLED`
+            booking being reinstated) plus POS room charges, minus what folio payments already
+            cover. Equals `balanceDue` for a `NEW`/`CONFIRMED` booking; for a booking that is
+            already `PAID` or `CANCELLED` it is what `balanceDue` would be if it were not. Decimal(10,2)
+            rendered as a string.
+        creditBalance:
+          type: string
+          description: Collected beyond what was charged - decimal(10,2) rendered as a string.
         roomChargeCount:
           type: integer
           description: >
             Number of ROOM_CHARGE payments this stay has ever generated (a raw historical count,
-            not "how many are still unsettled" - individual charges aren't tracked as
-            settled/unsettled, only the running total is) - same count as
-            `GET /bookings/{id}/pos-orders` would return entries.
+            not "how many are still unsettled") - same count as `GET /bookings/{id}/pos-orders`
+            would return entries.
 
     FolioPaymentMethod:
       type: string
@@ -13970,14 +14823,13 @@ components:
     FolioPayment:
       type: object
       description: >
-        Money actually collected against a booking's folio - the record that makes a
-        `ROOM_CHARGE` payment's amount stop counting as owed in `BookingFolio.roomChargesTotal`/
-        `CheckOutResult.outstandingBalance`/`TodayBoardEntry.outstandingBalance`. Deliberately
-        not tied to a shift - unlike `Payment`, cash collected this way is not counted in
-        end-of-shift cash-drawer reconciliation, the same gap `Booking.status = PAID` already
-        has for the room portion of a stay. Rows accumulate (a guest can pay part now, the rest
-        later) and are never edited or deleted - to correct a mistake, staff record another
-        entry, the same append-only convention the audit log uses.
+        Money actually collected against a booking's folio - room and POS room charges alike
+        (see `BookingFolio` for how it's applied). `shiftId` is the recorder's open cash shift
+        at the time, if they had one: that shift's `ShiftTotals.folioCash`/`folioCard`/
+        `folioOther` include it, and `folioCash` counts in its expected cash. Rows accumulate (a
+        guest can pay part now, the rest later) and are never edited or deleted - to correct a
+        mistake, staff record another entry, the same append-only convention the audit log
+        uses.
       required: [id, bookingId, method, amount, recordedByUserId, createdAt]
       properties:
         id:
@@ -13991,6 +14843,9 @@ components:
           description: Decimal(10,2) rendered as a string.
         recordedByUserId:
           type: string
+        shiftId:
+          type: string
+          nullable: true
         createdAt:
           type: string
           format: date-time
@@ -14006,8 +14861,8 @@ components:
           type: string
           description: >
             Decimal(10,2) as a string, greater than zero. Rejected with 409 if it would exceed
-            what's currently outstanding on this booking's folio - a fat-finger guard, not a
-            restriction on partial payment (a smaller amount than what's owed is always fine).
+            `BookingFolio.balanceDue` - a fat-finger guard, not a restriction on partial payment
+            (a smaller amount than what's owed is always fine).
 
     PaymentsSummary:
       type: object
@@ -14015,7 +14870,7 @@ components:
         Response of `GET /payments/summary`. See that operation's description for why
         `totals.roomCharge` is excluded from `grandTotal` - do not sum `totals.*` yourself on
         the client, use `grandTotal` as-is for received revenue.
-      required: [from, to, totals, grandTotal]
+      required: [from, to, totals, grandTotal, folioPaymentsTotal]
       properties:
         from:
           type: string
@@ -14028,6 +14883,14 @@ components:
         grandTotal:
           type: string
           description: '`totals.cash + totals.card + totals.other` - decimal(10,2) rendered as a string. Deliberately excludes `totals.roomCharge`.'
+        folioPaymentsTotal:
+          type: string
+          description: >
+            Money recorded against bookings' folios in the same period (`FolioPayment` rows, every
+            method) - the room, its early-departure fee and POS room charges once paid at the desk.
+            Decimal(10,2) rendered as a string. This, not any booking's `status`, is what the
+            dashboard's room revenue is built from. Not part of `grandTotal`: that stays the POS
+            figure.
 
     AuditAction:
       type: string
@@ -14114,6 +14977,9 @@ components:
         - STAFF_AREA_COVERAGE_RULE_CHANGED
         - ATTENDANCE_PUNCH_RECORDED
         - ATTENDANCE_PUNCH_CORRECTED
+        - ATTENDANCE_DAY_CORRECTED
+        - RECEIPT_SETTINGS_UPDATED
+        - RECEIPT_LOGO_CHANGED
         - EMPLOYEE_PAY_RATE_CHANGED
         - ROSTER_ACTUALS_EXPORTED
         - ROSTER_MONTH_IMPORTED
@@ -14611,13 +15477,17 @@ components:
     ShiftCodeVersionInput:
       type: object
       description: >
-        Body of `POST /shift-codes/{id}/versions`. No `staffArea`, `code` or `effectiveFrom` - the
-        first two are the edited code's own, the last is always today. The interval fields and
+        Body of `POST /shift-codes/{id}/versions`. No `staffArea` or `code` - they are the edited
+        code's own. `effectiveFrom` is optional (today when omitted). The interval fields and
         `displayColor` are nullable and so left out of `required` (see CLAUDE.md's Code generation
         section); omitting one means "none" (an OP/PH-style code with no hours, or no colour), not
         "keep the old value" - the form sends every field.
       required: [kind, countsAsWorked, isPaid]
       properties:
+        effectiveFrom:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          description: First day the new terms apply, `YYYY-MM-DD`. Defaults to today.
         kind:
           $ref: "#/components/schemas/ShiftCodeKind"
         startTime1:
@@ -15497,6 +16367,42 @@ components:
         createdAt:
           type: string
           format: date-time
+        correctionId:
+          type: string
+          description: Set on a punch recorded by `PUT /attendance/day`; every punch of one correction shares it.
+        voidedAt:
+          type: string
+          format: date-time
+          description: >
+            Present only on a voided punch (only returned with `includeVoided=true`): replaced by
+            a correction, no longer counted anywhere, kept as history.
+        voidedByEmail:
+          type: string
+        voidReason:
+          type: string
+
+    AttendanceDayCorrectionInput:
+      type: object
+      description: Body of `PUT /attendance/day`.
+      required: [employeeUserId, date, times, reason]
+      properties:
+        employeeUserId:
+          type: string
+        date:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          description: The hotel-local calendar day being corrected.
+        times:
+          type: array
+          maxItems: 12
+          items:
+            type: string
+            pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          description: Every punch of that day, `HH:mm` hotel time, strictly increasing. Empty clears the day.
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
 
     AttendancePunchCreateInput:
       type: object
@@ -15577,6 +16483,7 @@ components:
       properties:
         name:
           type: string
+          x-trim: true
           minLength: 1
           maxLength: 120
         serial:
@@ -15775,7 +16682,7 @@ components:
     NightAudit:
       type: object
       description: '`GET /night-audit` - see that operation for what each list contains.'
-      required: [date, missedArrivals, missedDepartures, snapshot, closure]
+      required: [date, missedArrivals, missedDepartures, unpaidBalances, snapshot, closure]
       properties:
         date:
           type: string
@@ -15790,6 +16697,15 @@ components:
           description: Sorted by `checkOut`, oldest first.
           items:
             $ref: "#/components/schemas/NightAuditBooking"
+        unpaidBalances:
+          type: array
+          description: >
+            Bookings whose stay is over (checked out, or `checkOut` on or before `date` and not
+            still checked in) or that are `CANCELLED`, and that still owe money
+            (`balanceDue` above zero) - whatever their `status`. Sorted by `checkOut`, oldest first.
+            Each row carries `balanceDue`.
+          items:
+            $ref: "#/components/schemas/NightAuditBooking"
         snapshot:
           $ref: "#/components/schemas/OccupancyReportRow"
         closure:
@@ -15801,10 +16717,23 @@ components:
     NightAuditBooking:
       type: object
       description: One booking on a night-audit list - just enough to recognise it and open it.
-      required: [id, guestName, roomName, roomUnitLabel, checkIn, checkOut, status, occupancyStatus]
+      required: [id, guestName, roomName, roomUnitLabel, checkIn, checkOut, status, occupancyStatus, unpaidOverstayNights]
       properties:
         id:
           type: string
+        balanceDue:
+          type: string
+          description: Decimal(10,2) string, `BookingFolio.balanceDue`. Present on every `unpaidBalances` row.
+        unpaidOverstayNights:
+          type: integer
+          minimum: 0
+          description: >
+            Nights a still-`CHECKED_IN` guest has stayed past `checkOut` with nothing agreed or
+            charged: `OverstayRule`'s nights `[checkOut, date]`, counted inclusively, so it is one
+            more than the days overdue shown next to it. `0` for a guest due out on `date` (the
+            departure night is still sellable), for anyone who is not checked in, and on every
+            `missedArrivals` and `unpaidBalances` row. A warning only - nothing is charged for
+            these nights and no revenue report counts them.
         guestName:
           type: string
           x-sensitive: true
@@ -16454,6 +17383,7 @@ components:
           description: Unique; digits, capital letters and hyphens, at most 20 characters (e.g. "6100").
         name:
           type: string
+          x-trim: true
           minLength: 1
           maxLength: 100
         type:

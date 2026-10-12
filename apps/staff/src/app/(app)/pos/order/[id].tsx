@@ -255,6 +255,7 @@ function OrderActions({ order, onChange }: { order: Order; onChange: (o: Order) 
   const prebill = useAction();
   const cancel = useAction();
   const [prebillNote, setPrebillNote] = useState<string | null>(null);
+  const [cancellingSent, setCancellingSent] = useState(false);
   const hasUnsent = order.items.some((i) => i.sentAt === null);
 
   if (isTerminal(order)) {
@@ -306,19 +307,69 @@ function OrderActions({ order, onChange }: { order: Order; onChange: (o: Order) 
 
       {can(user, "pos.takePayment") ? <Payment order={order} onChange={onChange} /> : null}
 
-      <Button
-        title="Cancel order"
-        variant="danger"
-        busy={cancel.busy}
-        onPress={() =>
-          confirmAsActor("Cancel order", `Cancel ${orderLabel(order)}? Nothing will be charged.`, user.name, async () => {
-            const r = await cancel.run(() => call(api.POST("/orders/{id}/cancel", { params: { path: { id: order.id } } }), "Could not cancel the order."));
-            if (r.ok) onChange(r.data);
-          }, "Cancel order")
-        }
-      />
+      {/* An order the kitchen/bar already has is cancelled by voiding every sent line: MANAGER+ and a
+          reason, enforced by the server (POST /orders/{id}/cancel) - so a waiter gets no button
+          that could only fail. */}
+      {order.status === "SENT" && !can(user, "pos.voidSentItem") ? (
+        <Body muted>A sent order can only be cancelled by a manager.</Body>
+      ) : (
+        <Button
+          title="Cancel order"
+          variant="danger"
+          busy={cancel.busy}
+          onPress={() => {
+            if (order.status === "SENT") {
+              setCancellingSent(true);
+              return;
+            }
+            confirmAsActor("Cancel order", `Cancel ${orderLabel(order)}? Nothing will be charged.`, user.name, async () => {
+              const r = await cancel.run(() => call(api.POST("/orders/{id}/cancel", { params: { path: { id: order.id } } }), "Could not cancel the order."));
+              if (r.ok) onChange(r.data);
+            }, "Cancel order");
+          }}
+        />
+      )}
       <ErrorText>{cancel.error}</ErrorText>
+      {cancellingSent ? <CancelSentDialog order={order} onClose={() => setCancellingSent(false)} onDone={onChange} /> : null}
     </>
+  );
+}
+
+function CancelSentDialog({ order, onClose, onDone }: { order: Order; onClose: () => void; onDone: (o: Order) => void }) {
+  const { api, user } = useSignedIn();
+  const [reason, setReason] = useState("");
+  const action = useAction();
+
+  function submit() {
+    const problem = validateVoidReason(reason);
+    if (problem) {
+      action.setError(problem);
+      return;
+    }
+    confirmAsActor("Cancel a sent order", `Cancel ${orderLabel(order)}? Everything already sent is voided and the kitchen/bar gets VOID tickets. Nothing is charged.`, user.name, async () => {
+      const r = await action.run(() =>
+        call(api.POST("/orders/{id}/cancel", { params: { path: { id: order.id } }, body: { reason: reason.trim() } }), "Could not cancel the order."),
+      );
+      if (r.ok) {
+        onDone(r.data);
+        onClose();
+      }
+    }, "Void and cancel");
+  }
+
+  return (
+    <Modal transparent animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" }}>
+        <View style={{ backgroundColor: colors.ink2, padding: 16, gap: 12, borderTopLeftRadius: 16, borderTopRightRadius: 16 }}>
+          <Title>{`Cancel ${orderLabel(order)}`}</Title>
+          <Body muted>Every line already sent is voided. Nothing is charged and the table is freed.</Body>
+          <Field label="Reason (required)" value={reason} onChangeText={setReason} maxLength={500} />
+          <ErrorText>{action.error}</ErrorText>
+          <Button title="Void and cancel" variant="danger" onPress={submit} busy={action.busy} />
+          <Button title="Keep the order" variant="secondary" onPress={onClose} disabled={action.busy} />
+        </View>
+      </View>
+    </Modal>
   );
 }
 
