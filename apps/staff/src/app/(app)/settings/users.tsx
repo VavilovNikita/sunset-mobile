@@ -5,7 +5,7 @@ import type { Schemas } from "@sunset/api-client/staff";
 import { Badge, Body, Button, Card, Choice, ErrorText, Field, Label, Loading, Row, Screen, Toggle, colors } from "@sunset/ui";
 import { RequireCapability } from "../../../components/Guard";
 import { ask } from "../../../lib/ask";
-import { validateNewUser, validatePassword } from "../../../lib/settings";
+import { functionConflictMessage, validateNewUser, validatePassword } from "../../../lib/settings";
 import { useAction, useLoad } from "../../../lib/hooks";
 import { useSignedIn } from "../../../lib/session";
 
@@ -16,7 +16,9 @@ const ROLES: { value: Schemas["Role"]; label: string }[] = [
   { value: "MANAGER", label: "Manager" },
   { value: "ADMIN", label: "Admin" },
 ];
-const FUNCTIONS: Schemas["JobFunction"][] = ["ENGINEER", "HOUSEKEEPER", "THERAPIST"];
+// HR is the director who decides shift requests - one active holder at a time (a second is a 409, shown beside its
+// switch). It opens nothing in this app: requests and the Telegram bot live on the web admin.
+const FUNCTIONS: Schemas["JobFunction"][] = ["ENGINEER", "HOUSEKEEPER", "THERAPIST", "HR"];
 
 export default function Users() {
   return (
@@ -35,6 +37,7 @@ function UserCard({ u, me, onSaved }: { u: User; me: string; onSaved: (u: User) 
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  const [functionError, setFunctionError] = useState<{ fn: Schemas["JobFunction"]; message: string } | null>(null);
   const write = useAction();
   const self = u.id === me;
 
@@ -44,6 +47,24 @@ function UserCard({ u, me, onSaved }: { u: User; me: string; onSaved: (u: User) 
     if (r.ok) {
       onSaved(pick(r.data as T));
       setNote(warning?.(r.data as T) ?? null);
+    }
+  }
+
+  async function saveFunctions(fn: Schemas["JobFunction"], on: boolean) {
+    const functions = on ? [...u.functions, fn] : u.functions.filter((x) => x !== fn);
+    setNote(null);
+    setFunctionError(null);
+    const r = await write.run(() => call(api.PATCH("/users/{id}/functions", { params: { path: { id: u.id } }, body: { functions } }), "Could not save job functions."));
+    if (r.ok) {
+      onSaved(r.data.user);
+      setNote(r.data.warning ?? null);
+      return;
+    }
+    // A refusal that is about this very switch (HR already held by someone else) is said next to it, not at the bottom.
+    const message = functionConflictMessage(r.status, r.error);
+    if (message) {
+      write.setError(null);
+      setFunctionError({ fn, message });
     }
   }
 
@@ -72,16 +93,10 @@ function UserCard({ u, me, onSaved }: { u: User; me: string; onSaved: (u: User) 
           />
           <Label>Job functions</Label>
           {FUNCTIONS.map((f) => (
-            <Toggle
-              key={f}
-              label={f.toLowerCase()}
-              value={u.functions.includes(f)}
-              disabled={write.busy}
-              onChange={(on) => {
-                const functions = on ? [...u.functions, f] : u.functions.filter((x) => x !== f);
-                void run(() => call(api.PATCH("/users/{id}/functions", { params: { path: { id: u.id } }, body: { functions } }), "Could not save job functions."), (x) => x.user, (x) => x.warning);
-              }}
-            />
+            <View key={f} style={{ gap: 4 }}>
+              <Toggle label={f.toLowerCase()} value={u.functions.includes(f)} disabled={write.busy} onChange={(on) => void saveFunctions(f, on)} />
+              {functionError?.fn === f ? <ErrorText>{functionError.message}</ErrorText> : null}
+            </View>
           ))}
           <Toggle
             label={u.active ? "Active" : "Disabled"}

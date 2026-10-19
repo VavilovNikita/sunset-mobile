@@ -50,6 +50,17 @@ export function validateNewUser(name: string, email: string, password: string): 
   return null;
 }
 
+/**
+ * The message beside a job-function switch the server refused. `PATCH /users/{id}/functions` answers 409 when the
+ * function can be held by one active person only (HR) and someone else has it - the server's text names who, and says
+ * to remove it from them first. Other failures keep the screen's general error.
+ */
+export function functionConflictMessage(status: number, serverMessage: string): string | null {
+  if (status !== 409) return null;
+  const text = serverMessage.trim();
+  return text ? text : "Already assigned to another employee.";
+}
+
 export function validatePassword(password: string): string | null {
   return password.length >= 8 && password.length <= 200 ? null : "The password must be 8 to 200 characters.";
 }

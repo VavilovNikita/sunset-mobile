@@ -33,7 +33,7 @@ const LOCAL_API = `http://127.0.0.1:${API_PORT}/api`;
 
 export const DEMO_PASSWORD = "demo-pass-123";
 export const DEMO_STAFF = [
-  { email: "admin@demo.local", name: "Ada Admin", role: "ADMIN" as const, functions: [] as ("ENGINEER" | "HOUSEKEEPER" | "THERAPIST")[] },
+  { email: "admin@demo.local", name: "Ada Admin", role: "ADMIN" as const, functions: [] as ("ENGINEER" | "HOUSEKEEPER" | "THERAPIST" | "HR")[] },
   { email: "manager@demo.local", name: "Max Manager", role: "MANAGER" as const, functions: [] },
   { email: "cashier@demo.local", name: "Cara Cashier", role: "CASHIER" as const, functions: [] },
   { email: "waiter@demo.local", name: "Walt Waiter", role: "WAITER" as const, functions: [] },

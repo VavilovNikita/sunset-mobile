@@ -962,7 +962,7 @@ export interface paths {
         /**
          * Create a booking as staff (front-desk / walk-in), optionally assigning a room immediately
          * @description Limits (see also `POST /bookings`): a stay is at most 90 nights (400). A booking that starts before today is back-entry and needs MANAGER or above (a lower role gets 403). A party larger than the room sleeps is accepted with `Booking.warning` set, not refused.
-         *     Requires CASHIER or above. Distinct from the public `POST /bookings` guest-inquiry flow: no new-booking notification email is sent, guest email/phone are optional (a walk-in may not have one on hand), and if `roomUnitId` is given the room is assigned in the same `Serializable` transaction as the booking - never a separate call, so there is no window where the booking exists without the room the staff member asked for. `totalPrice` is always server-computed from `Room.basePrice`/`RatePlan`, same as every other booking creation path.
+         *     Requires CASHIER or above. Distinct from the public `POST /bookings` guest-inquiry flow: no new-booking notification email is sent, guest email/phone are optional (a walk-in may not have one on hand), and if `roomUnitId` is given the room is assigned in the same `Serializable` transaction as the booking - never a separate call, so there is no window where the booking exists without the room the staff member asked for. `totalPrice` is computed by the server from `Room.basePrice`/`RatePlan`, same as every other booking creation path, unless a MANAGER or above sends `agreedTotal` - the one price a staff member may set (403 for a CASHIER who sends it).
          *
          *     This is also the anchor for a broader, deliberate role-scoping decision: at this property, CASHIER is a combined cashier/front-desk reception role, not a payments-only till operator. Creating this kind of booking requires reading room types and their prices to quote a walk-in, and requires reading existing bookings/the calendar/ availability to know what can even be offered - so `GET /rooms`, `GET /pricing/{roomId}`, `GET /bookings`, `GET /bookings/calendar`, and `GET /availability/{roomId}` are all CASHIER+ too. That is intentional breadth in support of this endpoint's own job, not five separate oversights to flag in review.
          */
@@ -1524,7 +1524,7 @@ export interface paths {
         };
         /**
          * Get the spa's half-hour grid for one day
-         * @description Requires CASHIER or above. `tables` (SPA-zone) and `appointments` for `date`, plus the backend's own opening hours - see `SpaSchedule`.
+         * @description Requires CASHIER or above, or the `THERAPIST` job function (read only - every change to an appointment stays CASHIER+). `tables` (SPA-zone) and `appointments` for `date`, plus the backend's own opening hours - see `SpaSchedule`.
          */
         get: operations["getSpaSchedule"];
         put?: never;
@@ -1549,7 +1549,7 @@ export interface paths {
         };
         /**
          * List active staff holding the THERAPIST job function
-         * @description Requires CASHIER or above - see `SpaTherapist` for why this is narrower than `GET /users`.
+         * @description Requires CASHIER or above, or the `THERAPIST` job function - see `SpaTherapist` for why this is narrower than `GET /users`.
          */
         get: operations["listSpaTherapists"];
         put?: never;
@@ -1688,9 +1688,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Add the treatments the linked order does not carry to that same order
-         * @description Requires CASHIER or above. For a `COMPLETED` appointment whose linked order (`orderId`) does not cover every treatment (`missingTreatmentNames` is not empty): adds exactly the missing quantity of each treatment to that same order, in one action and one transaction, through the ordinary order path (`POST /orders/{id}/items`) - so the price is the menu's live price at this moment, like every other POS line. Nothing is charged here; the order is then closed as usual. Returns the appointment with its refreshed `missingTreatmentNames` (empty now).
-         *     409 when the appointment is not `COMPLETED`, has no linked order, the linked order is `PAID` or `CANCELLED` (a closed order can't take lines), or nothing is missing.
+         * Bill the treatments the appointment's orders do not carry
+         * @description Requires CASHIER or above. For a `COMPLETED` appointment whose orders do not cover every treatment (`missingTreatmentNames` is not empty): bills exactly the missing quantity of each treatment, in one action and one transaction, through the ordinary order path (`POST /orders/{id}/items`) - so the price is the menu's live price at this moment, like every other POS line. Nothing is charged here; the order is then closed as usual. What is "carried" is counted over **all** the appointment's orders (cancelled ones excluded): its own (`orderId`) and the top-up orders opened by earlier calls.
+         *     The missing treatments go onto the first of those orders that can still take lines (`OPEN`/`SENT`). When none can - the order is already `PAID` - a **new order** for just the missing treatments is opened on the appointment's table and linked to the same appointment (`Order.spaAppointmentId` names it); the paid order is not touched. Returns the appointment with its refreshed `missingTreatmentNames` (empty now).
+         *     409 when the appointment is not `COMPLETED`, has no order at all, or nothing is missing.
          */
         post: operations["billMissingSpaTreatments"];
         delete?: never;
@@ -3012,7 +3013,7 @@ export interface paths {
         head?: never;
         /**
          * Set a staff user's job functions
-         * @description Requires an authenticated session with role `ADMIN` - job functions are managed under `/users/**` alongside role, password and active-state, not through any lower-privilege route. Replaces the full set (send every function this user should have; an empty array clears all of them). Unlike `PATCH /users/{id}` (role), `PATCH /users/{id}/password`, and `PATCH /users/{id}/active`, this does not bump `tokenVersion` and does not invalidate any existing token - `JwtAuthFilter` grants `FUNCTION_<name>` authorities from a fresh read of this user on every request already (the same row it re-reads to check `active`/ `tokenVersion`), so a change here is enforced on the very next request with no re-login needed. `warning` in the response is set when this change removes `THERAPIST` from a user who holds future `BOOKED` spa appointments - see `UserUpdateResult`.
+         * @description Requires an authenticated session with role `ADMIN` - job functions are managed under `/users/**` alongside role, password and active-state, not through any lower-privilege route. Replaces the full set (send every function this user should have; an empty array clears all of them). Unlike `PATCH /users/{id}` (role), `PATCH /users/{id}/password`, and `PATCH /users/{id}/active`, this does not bump `tokenVersion` and does not invalidate any existing token - `JwtAuthFilter` grants `FUNCTION_<name>` authorities from a fresh read of this user on every request already (the same row it re-reads to check `active`/ `tokenVersion`), so a change here is enforced on the very next request with no re-login needed. `warning` in the response is set when this change removes `THERAPIST` from a user who holds future `BOOKED` spa appointments - see `UserUpdateResult`. Giving `HR` to a user while another **active** user already holds it is a 409 naming the holder (the check runs under a lock, so two simultaneous assignments cannot both succeed).
          */
         patch: operations["updateUserFunctions"];
         trace?: never;
@@ -3078,7 +3079,7 @@ export interface paths {
         head?: never;
         /**
          * Enable or disable a staff user
-         * @description Requires an authenticated session with role `ADMIN`. Disabling a user (`active: false`) rejects every request bearing one of their tokens on the very next request, regardless of that token's remaining validity window - the closest thing this stateless-JWT system has to revoking access on termination. An admin cannot disable their own account (blocked before any DB write, same guard as `PATCH /users/{id}` for role changes). `warning` in the response is set when disabling this user leaves future `BOOKED` spa appointments assigned to them - see `UserUpdateResult`.
+         * @description Requires an authenticated session with role `ADMIN`. Disabling a user (`active: false`) rejects every request bearing one of their tokens on the very next request, regardless of that token's remaining validity window - the closest thing this stateless-JWT system has to revoking access on termination. An admin cannot disable their own account (blocked before any DB write, same guard as `PATCH /users/{id}` for role changes). `warning` in the response is set when disabling this user leaves future `BOOKED` spa appointments assigned to them - see `UserUpdateResult`. Re-enabling (`active: true`) a user who holds the `HR` function while another active user holds it is a 409.
          */
         patch: operations["updateUserActive"];
         trace?: never;
@@ -4256,6 +4257,843 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/gym/reservations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Gym schedule for a day or a week
+         * @description Requires CASHIER or above. Every reservation whose `date` is within `from`..`to` (both inclusive, at most 14 days), with the opening hours and rules the grid needs so it never renders a slot the server would refuse. Cancelled reservations are left out unless `includeCancelled` is true. Each reservation carries `automation` - what the equipment automation did for it (see `GymAutomation`).
+         */
+        get: operations["listGymReservations"];
+        put?: never;
+        /**
+         * Reserve the gym for a hotel booking (front desk)
+         * @description Requires CASHIER or above. The staff counterpart of `POST /guest/gym/reservations`: the same slot rules, but staff name the hotel booking themselves and may book a guest who has not arrived yet (`NEW`/`CONFIRMED`/`PAID`, not yet checked in) on a day of their stay. Rules checked by the server: the slot is on the 30-minute grid, `durationMinutes` is 30, 60, 90 or 120, the whole slot lies within the opening hours, it does not start before the current half hour, the date is within the booking's stay (`checkIn`..`checkOut`, both ends included), the booking is not cancelled, checked out or a no-show (409), and the booking's reservations on that date stay within 120 minutes in total (409). The gym is exclusive: an overlap with any other reservation is a 409 decided by the database (`gym_reservation_no_overlap`, V142), not by a pre-check. Free of charge - nothing is billed.
+         */
+        post: operations["createGymReservation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/reservations/{id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Move a gym reservation
+         * @description Requires CASHIER or above. Full replacement of `date`, `startTime`, `durationMinutes`. Only a `BOOKED` reservation that has not ended can move, and the same rules as creation apply to the new values. Once the equipment automation has started on a reservation (the switch-on was attempted) it can no longer be moved to another time - only its `durationMinutes` can change, with `date` and `startTime` unchanged (extending or shortening a session in progress); to move it, cancel it and book again (409).
+         */
+        patch: operations["updateGymReservationSchedule"];
+        trace?: never;
+    };
+    "/gym/reservations/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a gym reservation
+         * @description Requires CASHIER or above. A `BOOKED` reservation, also one in progress. If the equipment was already switched on for it, the automation switches it off on its next run (within a minute) unless another reservation starts within the lead time - see `GymAutomation`.
+         */
+        post: operations["cancelGymReservation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/settings/hall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Gym opening hours and automation parameters
+         * @description Requires ADMIN.
+         */
+        get: operations["getGymHallSettings"];
+        /**
+         * Change the gym opening hours and automation parameters
+         * @description Requires ADMIN. Full replacement. `openTime`/`closeTime` must lie on the 30-minute grid with `openTime` before `closeTime`. The lead time, air-conditioner mode, temperature and fan speed take effect at the automation's next transition. Audited.
+         *     Narrowing the hours never cancels anything, but the owner must know it happens: the response lists every `BOOKED` reservation that has not ended and does not fit the new hours (`outsideHours`). Without `force=true`, when that list is not empty **nothing is saved** (`saved` false) and the list is returned so the screen can ask; the same request with `force=true` saves anyway. The reservations stay as they are and the schedule still shows them.
+         */
+        put: operations["updateGymHallSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/guest/gym/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether this guest can book the gym, and the rules
+         * @description Requires a guest JWT. `eligible` is true when the account has a booking that is not cancelled and is `CHECKED_IN`; `stays` lists those bookings with their dates (the date picker's range). When not eligible, `message` says why in plain words. Always 200.
+         */
+        get: operations["getGuestGymInfo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/guest/gym/slots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Free gym slots on a date
+         * @description Requires a guest JWT. The day's half-hour slots with whether each can be booked and for how long at most (the shorter of 120 minutes, what is left of the booking's daily allowance, the closing time and the next reservation). `bookingId` is optional when the account has exactly one eligible booking. 403 when the guest has no `CHECKED_IN` booking; 400 when `date` is outside the stay.
+         */
+        get: operations["getGuestGymSlots"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/guest/gym/reservations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * This guest's gym reservations
+         * @description Requires a guest JWT. Reservations of every booking linked to this account, newest date first, cancelled ones included.
+         */
+        get: operations["listGuestGymReservations"];
+        put?: never;
+        /**
+         * Reserve the gym
+         * @description Requires a guest JWT and a booking of this account that is `CHECKED_IN` (403 otherwise). `date` and the whole slot must be within the stay (`checkIn`..`checkOut`) and not in the past. The other slot rules are those of `POST /gym/reservations`. Free of charge. `bookingId` is optional when the account has exactly one checked-in booking.
+         */
+        post: operations["createGuestGymReservation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/guest/gym/reservations/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel one of my gym reservations
+         * @description Requires a guest JWT. Only a `BOOKED` reservation of one of this account's own bookings, and only before it starts (409 afterwards). Someone else's reservation answers 404.
+         */
+        post: operations["cancelGuestGymReservation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Gym equipment with its current state
+         * @description Requires CASHIER or above. Every **active** gym device in display order. Relays carry the state Tuya reports (`on`, `online`); air conditioners carry the last command *we* sent (`lastCommand`) because the IR link is one-way and the real state is unknowable. State is read from Tuya on demand only - there is no background polling anywhere (the Tuya trial quota is about 26 000 calls a month and the service stops when it runs out). A relay's state is served from a ~30 second server-side cache; `refresh=true` bypasses the cache and is what the page's "Refresh" button sends. A relay whose state could not be read has `on` null and `stateError` set; the rest of the list is still returned.
+         */
+        get: operations["listGymDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/devices/{id}/relay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch a relay (fan) on or off
+         * @description Requires CASHIER or above. Sends the switch command to Tuya, then re-reads the relay and returns its state. Audited with the outcome (success or the failure), whoever sent it. 409 if the device is not a relay or is switched off in settings.
+         */
+        post: operations["setGymRelay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/devices/{id}/ac": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send one air-conditioner command
+         * @description Requires CASHIER or above. One command carries the whole setting (`power`, `mode`, `temp`, `wind`) - that is how the IR scene command works. The server stores it as the device's `lastCommand` (what, when, by whom) once Tuya accepted it. It is the last thing *sent*, not a reading of the air conditioner. Audited with the outcome.
+         */
+        post: operations["sendGymAcCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether the gym equipment can be controlled at all
+         * @description Requires CASHIER or above. Answers from the server's own configuration and database - **no call to Tuya**, so the Gym pages can show "Tuya is not configured" the moment they open, without spending a call or waiting for one to fail. `tuyaConfigured` is false when the server has no Tuya keys; `automatedDeviceCount` is how many active devices the reservation automation switches (`inBookings`). With either at zero a reservation's equipment is never touched, and a screen says the automation is not set up.
+         */
+        get: operations["getGymStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/settings/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Configured gym devices (settings)
+         * @description Requires ADMIN. Every configured device, active or not, with its Tuya ids. No call to Tuya.
+         */
+        get: operations["listGymDeviceConfigs"];
+        put?: never;
+        /**
+         * Add a gym device
+         * @description Requires ADMIN. Device ids are runtime data, not migrations: the admin picks them from `GET /gym/settings/tuya/devices`. A relay needs `switchCode`; an air conditioner needs `infraredId` (its IR hub) and takes `remoteId` (defaults to `tuyaDeviceId`). Added last in the display order. 409 if the Tuya device is already configured.
+         */
+        post: operations["createGymDeviceConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/settings/devices/reorder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set the display order
+         * @description Requires ADMIN. `ids` is the full list of configured device ids in the wanted order; any id missing from it or unknown is a 400.
+         */
+        post: operations["reorderGymDeviceConfigs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/settings/devices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update a gym device
+         * @description Requires ADMIN. Full replacement of the `GymDeviceConfigInput` fields; the display order is changed through `reorder`.
+         */
+        put: operations["updateGymDeviceConfig"];
+        post?: never;
+        /**
+         * Remove a gym device
+         * @description Requires ADMIN. Removes it from the page; the audit entries about it stay. To hide a device temporarily, set `active` false instead.
+         */
+        delete: operations["deleteGymDeviceConfig"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/settings/tuya/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Devices of the Tuya project (for adding)
+         * @description Requires ADMIN. Fetched live from the Tuya project - this costs Tuya calls, so the screen asks only when the admin opens the "add" list. Never contains Tuya's `localKey`.
+         */
+        get: operations["listTuyaDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/settings/tuya/devices/{tuyaDeviceId}/switch-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tuyaDeviceId: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Switch codes of a relay
+         * @description Requires ADMIN. The device's status codes whose value is a boolean - the candidates for `switchCode` (for the gym's WiFi Breaker T relays it is `switch_1`).
+         */
+        get: operations["listTuyaSwitchCodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/settings/tuya/infrareds/{infraredId}/remotes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                infraredId: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Remotes learned by an IR hub
+         * @description Requires ADMIN. `GET /v2.0/infrareds/{infrared_id}/remotes` - links an air conditioner to its hub. Needs the IR control API subscribed on the Tuya project; without it Tuya answers "This API is not subscribed" (code 28841101, seen on this project) and this is a 503.
+         */
+        get: operations["listTuyaInfraredRemotes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gym/settings/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tuya calls this month
+         * @description Requires ADMIN. How many calls to Tuya this server made in the current Bangkok-time month, to watch the trial quota. Reading it costs no Tuya call.
+         */
+        get: operations["getGymTuyaUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the staff notification settings
+         * @description Requires an authenticated session with role `ADMIN`. See `NotificationSettings`.
+         */
+        get: operations["getNotificationSettings"];
+        /**
+         * Replace the staff notification settings
+         * @description Requires `ADMIN`. A full `PUT`, not a patch. `lateGraceMinutes` below the attendance terminal's poll interval (`minLateGraceMinutes`) is a 400 on `lateGraceMinutes`: the terminal cannot have reported a punch any sooner, so a shorter grace would only produce false "late" messages. `absenceMinutes` must not be shorter than `lateGraceMinutes`. Every recipient must be an existing, active user (400 on the list otherwise). Quiet hours with the same start and end are a 400 (turn them off with `quietHoursEnabled: false`). Recorded in the audit log (`NOTIFICATION_SETTINGS_UPDATED`) naming what changed; an unchanged `PUT` writes nothing.
+         */
+        put: operations["updateNotificationSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/staff-bot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the staff Telegram bot and shift-request settings
+         * @description Requires an authenticated session with role `ADMIN`. See `StaffBotSettings`.
+         */
+        get: operations["getStaffBotSettings"];
+        /**
+         * Replace the staff Telegram bot and shift-request settings
+         * @description Requires `ADMIN`. A full `PUT`, not a patch. A number outside its documented range, or an `eveReminderTime` that is not `HH:mm`, is a 400 on that field. Recorded in the audit log (`STAFF_BOT_SETTINGS_UPDATED`) naming what changed; an unchanged `PUT` writes nothing.
+         */
+        put: operations["updateStaffBotSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/shift-change-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List employees' requests to move or remove a shift
+         * @description Requires MANAGER or above, or the `HR` job function (a read: only `HR` holders and `ADMIN` may decide, see `POST /shift-change-requests/{id}/decision`). Newest first, at most 200. `from` and `to` filter on the date of the shift the request is about (hotel dates, both ends inclusive). Each row carries the snapshot taken when it was filed, so it still reads correctly after the roster entry changed, and `coverage` - how many people of the employee's department would still work on the day(s) concerned against the department's minimum. Coverage below the minimum is information for the decider, never a block.
+         */
+        get: operations["listShiftChangeRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/shift-change-requests/deciders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Who decides shift requests right now
+         * @description Requires MANAGER or above, or the `HR` job function. The active `HR` holder (at most one), whether they are on leave today, whether `ADMIN` is the fallback (setting `fallbackToAdmin`) and who therefore decides today. `callerMayDecide` is the answer for the caller, so a screen can show or hide the Approve / Reject buttons without guessing.
+         */
+        get: operations["getShiftRequestDeciders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/shift-change-requests/hr-vacation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set or clear the HR director's leave
+         * @description Requires `ADMIN` or the `HR` job function. The `HR` holder sets their own leave; an `ADMIN` sets it for the current holder. During the leave (hotel dates, both ends inclusive) requests go to `ADMIN` instead, if `fallbackToAdmin` is on. Both dates or neither (neither clears the leave); `to` must not be before `from`. 409 when nobody holds `HR`. Audited (`HR_VACATION_CHANGED`); an unchanged value writes nothing.
+         */
+        put: operations["setHrVacation"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/shift-change-requests/{id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve or reject a shift request
+         * @description Requires `ADMIN` or the `HR` job function at the route; the service then checks that the caller is one of today's deciders (see `GET /shift-change-requests/deciders`) - 403 with a message otherwise. **Approving applies the change through the same code as the roster grid** (`PATCH /roster/entries/{id}/date` or `DELETE /roster/entries/{id}`), in one transaction, with all of its checks; an approved "delete" removes the entry (a day off is the absence of one). If the entry was changed after the request was filed (moved, deleted, locked, another shift code, employee deactivated) or the target day is no longer free, nothing is applied and the request becomes `EXPIRED` with `expiredReason`. Idempotent: deciding a request that is no longer `PENDING` changes nothing and returns it as it is - two deciders pressing at once apply the change once. Audited as the caller.
+         */
+        post: operations["decideShiftChangeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/shift-change-requests/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw a pending shift request
+         * @description Requires `ADMIN` or the `HR` job function and the same "one of today's deciders" check as the decision (an employee withdraws their own request in the bot). Only a `PENDING` request can be withdrawn; any other status is returned unchanged. Audited.
+         */
+        post: operations["cancelShiftChangeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether notifications can be delivered at all
+         * @description Requires MANAGER or above. Answers from the server's own configuration and its cached `getMe` answer - **no call to Telegram** per request - so the pages can say "Telegram is not configured" the moment they open. `telegramConfigured` is false while the server has no `TELEGRAM_BOT_TOKEN`. `botUsername` is null until the server has asked Telegram for it once (it does so by itself within seconds of starting, and again while it is unknown).
+         */
+        get: operations["getNotificationStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/staff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Staff with their notification channel and language
+         * @description Requires MANAGER or above. Every staff account (active ones first, then by name) with the one thing the Link Telegram button needs: whether a chat is linked. It exists next to `GET /users` (ADMIN only) because the people who may link a chat are managers.
+         */
+        get: operations["listNotificationStaff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/staff/{userId}/language": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set one employee's notification language
+         * @description Requires MANAGER or above. `language` omitted or null clears it, so the person gets the default from the settings. Applies to messages raised from then on; a message already raised keeps the language it was written in. Audited (`NOTIFICATION_LANGUAGE_UPDATED`).
+         */
+        put: operations["setNotificationStaffLanguage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/links/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start linking an employee's chat
+         * @description Requires MANAGER or above. Creates a single-use code that lives 15 minutes and returns the `https://t.me/<bot>?start=<code>` link (show it as a QR). The employee opens it and presses Start; the bot then links the chat and answers "Linked: name" in their language. An earlier unused code of the same employee stops working. 409 when Telegram is not configured on the server, the bot's name is not known yet, or the employee is deactivated. Audited (`NOTIFICATION_LINK_CODE_CREATED`, the code itself is never written down).
+         */
+        post: operations["createNotificationLinkCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/links/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Unlink an employee's chat
+         * @description Requires MANAGER or above. Removes the link on `channel` (default `TELEGRAM`); pending deliveries to that chat fail with "no linked chat". 404 when nothing was linked. Audited (`NOTIFICATION_CHANNEL_UNLINKED`). The employee can also send /stop to the bot.
+         */
+        delete: operations["deleteNotificationLink"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What was sent to whom, and whether it arrived
+         * @description Requires MANAGER or above. Newest first. `from` / `to` are hotel (Asia/Bangkok) days, both inclusive. `deliveryStatus` `NO_CHANNEL` means the recipient had no linked chat when the message was raised. At most `limit` rows (default 200, at most 500).
+         */
+        get: operations["listNotificationLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lighting/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether lighting can be used at all
+         * @description Requires MANAGER or above. Answers from the server's own configuration - **no call to any controller** - so the Lighting pages can say "not configured" the moment they open. `configured` is false until the server has `LIGHTING_ALLOWED_CIDRS` set (the networks a controller may be on); while false, nothing can be sent to a controller and the endpoints that would make the server send a request answer 409.
+         */
+        get: operations["getLightingStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lighting/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lighting controllers with their live state
+         * @description Requires MANAGER or above (one matcher in `SecurityConfig.LIGHTING_CONTROL_ROLE`). Every **active** WLED controller in display order, read over the hotel LAN in parallel with a short timeout (`app.lighting.request-timeout-ms`, about 2.5 s), so one dead controller costs the page one timeout, not one per device. A controller that does not answer has `online` false and `stateError` set; the rest of the list is still returned. State and the preset list are served from a short server-side cache (`app.lighting.state-cache-seconds`, 10 s); `refresh=true` bypasses it and is what the page's "Refresh" button sends. Nothing polls in the background - a controller is contacted only when someone opens the page, refreshes, or sends a command. When lighting is not configured on the server (see `GET /lighting/status`) this is a 200 with `configured` false and an empty `devices` list, without contacting anything.
+         */
+        get: operations["listLightingDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lighting/devices/{id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch a controller, set its brightness or apply a preset
+         * @description Requires MANAGER or above. Any combination of `isOn`, `brightness` and `presetId`, at least one. The command is sent to the controller, then its state is read back and returned - what WLED reports, not what was asked for (a preset is applied by WLED a moment after the request). Note that WLED treats brightness 0 as "off". Audited with who, which controller, what was asked and the outcome, success or failure. 409 when the controller is disabled in settings or lighting is not configured on the server (`Lighting is not configured on the server`). 502 (the message names the controller) when it cannot be reached, answers with an error, or its stored address is not an allowed private address any more.
+         */
+        post: operations["setLightingState"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lighting/settings/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Configured lighting controllers (settings)
+         * @description Requires ADMIN. Every configured controller, active or not. No call to the controllers.
+         */
+        get: operations["listLightingDeviceConfigs"];
+        put?: never;
+        /**
+         * Add a lighting controller
+         * @description Requires ADMIN. `host` must be an IP address or hostname that resolves to a **private LAN address** (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) and inside the networks of `app.lighting.allowed-cidrs` (which the server must have set); loopback, link-local (169.254.x.x), this server's own addresses and anything public are a 400 on `host`. The address is checked again on every request to the controller, not only here. Added last in the display order. The name is unique ignoring case and spaces (409). Also 409 `Lighting is not configured on the server` while `GET /lighting/status` says `configured: false` - there is then no network a host could be in.
+         */
+        post: operations["createLightingDeviceConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lighting/settings/devices/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a controller address before saving it
+         * @description Requires ADMIN. Asks the controller at `host:port` for `/json/info` without saving anything, so the form can test before saving. A controller that does not answer is a **200** with `reachable` false and a short `error` - that is the result of the test, not a failure of the request. A `host` that is not an allowed private address is a 400, exactly as on save; 409 when lighting is not configured on the server.
+         */
+        post: operations["checkLightingDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lighting/settings/devices/reorder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set the display order
+         * @description Requires ADMIN. `ids` is the full list of configured controller ids in the wanted order; any id missing from it or unknown is a 400.
+         */
+        post: operations["reorderLightingDeviceConfigs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lighting/settings/devices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a lighting controller
+         * @description Requires ADMIN. Removes it from the page; the audit entries about it stay. To hide a controller temporarily, set `active` false instead.
+         */
+        delete: operations["deleteLightingDeviceConfig"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a lighting controller
+         * @description Requires ADMIN. Only the fields sent change. `location` sent as an empty string clears it. A changed `host` or `port` is checked like on create and is a 409 when lighting is not configured on the server; renaming, `location` and `active` always work. The display order is changed through `reorder`.
+         */
+        patch: operations["updateLightingDeviceConfig"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4266,10 +5104,10 @@ export interface components {
          */
         Role: "ADMIN" | "MANAGER" | "CASHIER" | "WAITER";
         /**
-         * @description A second, independent authorization axis alongside `Role` — a sideways job, not a step on the ADMIN > MANAGER > CASHIER > WAITER ladder. A function grants access to specific endpoints on its own, without granting anything else and without being expressed as a role comparison; it never appears in the RoleHierarchy bean. `User.functions` is a set (zero or more, no duplicates) — see that schema. `THERAPIST` marks a staff account as a spa therapist for `SpaAppointment.therapistUserId` - an ordinary staff account like any other (the same account shape shifts/hours will use), not a separate person record; one whose holder never signs in costs nothing beyond the row itself. No endpoint is gated on this function in v1 (there is no therapist self-service screen yet - reception is the only surface), so it exists purely as a tag on who counts as a bookable therapist.
+         * @description A second, independent authorization axis alongside `Role` — a sideways job, not a step on the ADMIN > MANAGER > CASHIER > WAITER ladder. A function grants access to specific endpoints on its own, without granting anything else and without being expressed as a role comparison; it never appears in the RoleHierarchy bean. `User.functions` is a set (zero or more, no duplicates) — see that schema. `THERAPIST` marks a staff account as a spa therapist for `SpaAppointment.therapistUserId` - an ordinary staff account like any other (the same account shape shifts/hours will use), not a separate person record; one whose holder never signs in costs nothing beyond the row itself. No endpoint is gated on this function in v1 (there is no therapist self-service screen yet - reception is the only surface), so it exists purely as a tag on who counts as a bookable therapist. `HR` marks the HR director, who decides employees' requests to move or remove a shift (`/shift-change-requests`) - in the staff Telegram bot or on the admin screen - and may *read* the month's roster and the attendance summary (`GET /roster`, `GET /roster/employees`, `GET /attendance/summary`) to decide on real data; every write to the roster stays MANAGER+. **At most one active user holds `HR`**: giving it to a second active user (or reactivating a deactivated holder while another holds it) is a 409 naming the current holder. While nobody holds it, or the holder is on leave (`PUT /shift-change-requests/hr-vacation`), the administrators decide, if `StaffBotSettings.fallbackToAdmin` is on.
          * @enum {string}
          */
-        JobFunction: "ENGINEER" | "HOUSEKEEPER" | "THERAPIST";
+        JobFunction: "ENGINEER" | "HOUSEKEEPER" | "THERAPIST" | "HR";
         /**
          * @description Physical area a POS Table belongs to.
          * @enum {string}
@@ -4593,12 +5431,16 @@ export interface components {
             /** @description Denormalized from the creating user at read time, same convention as `Order.openedByEmail` - null for a block created before this was tracked, not a display bug; there is no "unknown user" placeholder to invent for history that was never captured. */
             createdByEmail: string | null;
             maintenanceTask: components["schemas"]["RoomUnitBlockMaintenanceTask"];
+            /** @description Who must close this block (ENGINEER or HOUSEKEEPER): the notification centre tells whoever is on shift with this function. Absent on a block created before the field existed; such a block's reminders go to the director recipients. Deliberately not in `required` (a nullable required property would generate a `@NotNull` that rejects the null). */
+            responsibleFunction?: components["schemas"]["BlockResponsibleFunction"];
         };
         /** @description Body of `POST /room-units/{id}/blocks`. */
         RoomUnitBlockInput: {
             fromDate: string;
             toDate: string;
             reason: string;
+            /** @description Defaults to ENGINEER when omitted. */
+            responsibleFunction?: components["schemas"]["BlockResponsibleFunction"];
         };
         /** @description One booking whose stay overlaps a block being created on this unit - enough for the UI to name the guest and link to the booking (`GET /bookings/{id}`), not the full `Booking` object. `checkIn`/`checkOut`/`status` are the booking's own derived-from-segments fields (see `Booking`'s own description), not the specific segment that touches this unit - the overwhelmingly common case is one segment, and this stays a simple per-booking summary rather than a per-segment one. */
         RoomUnitBlockAffectedBooking: {
@@ -4684,7 +5526,7 @@ export interface components {
             /** @description A maintained sum of `treatments[].durationMinutes` - see the class description. */
             durationMinutes: number;
             status: components["schemas"]["SpaAppointmentStatus"];
-            /** @description The POS order that charged this treatment, if any - auto-resolved server-side once the order actually carries a `SPA`-department item and names this appointment's booking or table unambiguously, or set via an explicit `spaAppointmentId` on `OrderCreateInput` (see that field for exactly how), never computed or amount-bearing here. A `COMPLETED` appointment with `orderId: null` is a real, visible gap (a treatment settled another way, or one nobody rang up yet) - deliberately not blocked, see the class description. */
+            /** @description The POS order that charged this treatment, if any - auto-resolved server-side once the order actually carries a `SPA`-department item and names this appointment's booking or table unambiguously, or set via an explicit `spaAppointmentId` on `OrderCreateInput` (see that field for exactly how), never computed or amount-bearing here. A `COMPLETED` appointment with `orderId: null` is a real, visible gap (a treatment settled another way, or one nobody rang up yet) - deliberately not blocked, see the class description. This is the appointment's **own, first** order. Further orders can bill the same appointment (the top-up opened by `POST /spa-appointments/{id}/bill-missing-treatments` when the first one is already paid); they are not listed here, but `Order.spaAppointmentId` names the appointment and `missingTreatmentNames` is counted over all of them. */
             orderId: string | null;
             /** @description See the class description. Empty when there's nothing to warn about. */
             missingTreatmentNames: string[];
@@ -4888,6 +5730,8 @@ export interface components {
             children?: number;
             /** @description An existing `Guest` card picked at the counter. When given, the booking is linked to exactly that card (404 if it doesn't exist) instead of the usual find-or-create by `guestEmail`. `guestName`/`guestEmail`/`guestPhone` are still the booking's own snapshot of what was given - the form prefills them from the card, but whatever is sent is what's stored. */
             guestId?: string | null;
+            /** @description Optional price for the whole stay, entered by staff instead of the rate-plan price (a negotiated or package rate). MANAGER or above only - a CASHIER sending it gets 403; leave it out (or `null`) and the stay is priced from `Room.basePrice`/`RatePlan` as usual. Zero or more, at most two decimals (400 on this field otherwise). The total is spread over the nights like a SiteMinder price and frozen per night, so a later extension prices only the new nights at the current rate. The audit entry records that the price was manual, with this figure and the rate-plan figure it replaced. */
+            agreedTotal?: string | null;
         };
         /** @description Body of `POST /bookings/staff/quote` - the fields of `StaffBookingCreateInput` that decide price and availability. */
         StaffBookingQuoteInput: {
@@ -5044,8 +5888,10 @@ export interface components {
             totalPrice: string;
             /** @description Decimal(10,2) rendered as a string, `"0.00"` unless an early checkout released nights and staff chose to charge them anyway (`CheckOutInput.chargeUnusedNights`). Owed on top of `totalPrice` - see `BookingFolio`. */
             earlyDepartureFee?: string;
-            /** @description What the guest still owes on this booking right now - `BookingFolio.balanceDue`, computed by the server in one place (`BookingFolioCalculator`) and sent on every booking, whatever its `status` or `occupancyStatus`: a checked-out booking, a `NEW` one whose dates have passed and a `CANCELLED` one with POS charges can all owe money. Decimal(10,2) rendered as a string, never below `"0.00"`. A client shows its "Owes" badge from this field and never works the balance out itself. */
+            /** @description What the guest still owes on this booking right now - `BookingFolio.balanceDue`, computed by the server in one place (`BookingFolioCalculator`) and sent on every booking, whatever its `status` or `occupancyStatus`: a checked-out booking, a `NEW` one whose dates have passed and a `CANCELLED` one with POS charges can all owe money. Decimal(10,2) rendered as a string, never below `"0.00"`. A client shows its "Owes" badge from `owes` and never works the balance out itself. A guest marked `NO_SHOW` owes nothing for the room - only other charges on the booking count. */
             balanceDue?: string;
+            /** @description Whether `balanceDue` is a debt that has already fallen due - the one flag a client shows its "Owes" badge from. `true` only when `balanceDue` is above zero **and** the guest is in the house or gone (`occupancyStatus` `CHECKED_IN`, including a stay past its `checkOut`, or `CHECKED_OUT`), the booking is `CANCELLED` (what remains is charges), or the stay's dates are over. `false` for a booking that has not arrived yet, however unpaid - that money is still to be collected, not owed. */
+            owes?: boolean;
             status: components["schemas"]["BookingStatus"];
             channel: components["schemas"]["BookingChannel"];
             purpose: components["schemas"]["BookingPurpose"];
@@ -5539,6 +6385,8 @@ export interface components {
             bookingId: string | null;
             /** @description Set when `isBlocked` is true (`RoomUnitBlock.reason`). */
             blockReason: string | null;
+            /** @description The name on the booking that holds this unit that day - set when `isBooked` is true. A screen shows it in place of `blockReason` on a day that has a booking (a block laid over a booking is still a booking day for the person looking at the room). */
+            guestName?: string | null;
         };
         /** @description Per-day inventory breakdown for staff, at both the room-type level (`unitCount`, `blockedCount`, `bookedCount`, `availableCount`) and the physical-room level (`units[]`). `availableCount` is the derived remainder (`unitCount - blockedCount - bookedCount`) and can go negative - that's not clamped away, since a negative remainder (e.g. after room units are deactivated) is exactly the thing staff need to see, not hide. `blockedCount` counts *distinct* blocked active units for the day (an overlapping second block on the same unit doesn't double-count); `bookedCount` counts bookings covering the day regardless of whether they have an assigned unit - an unassigned booking still occupies one unit of the type. */
         AvailabilityDay: {
@@ -5797,6 +6645,7 @@ export interface components {
         };
         ShiftCloseInput: {
             closingCashCounted?: number;
+            /** @description Required (400 on `notes`) when `closingCashCounted` differs from the expected cash (opening float + cash payments + cash folio payments of the shift) - the note says why the drawer is over or short. Optional when the drawer matches. */
             notes?: string | null;
         };
         /** @description Sum of this shift's `Payment.amount`, broken out by method — CASH/CARD/OTHER only; ROOM_CHARGE payments settle against the room folio, not this shift's cash/card reconciliation, so they're reported separately as `roomCharge`. `folioCash`/`folioCard`/ `folioOther` (shift reads only, absent from `GET /payments/summary`) are the `FolioPayment`s recorded during this shift (their `shiftId`) - money taken at reception against a booking, kept apart from POS sales. Expected cash is `openingCashFloat` + `cash` + `folioCash`. */
@@ -5942,12 +6791,12 @@ export interface components {
          * @description The fixed vocabulary of significant staff actions this system records. Deliberately not open-ended (a free-text action name) - a closed set is what makes "filter by action type" on `GET /audit-log` and a fixed dropdown in the admin UI possible at all. Adding a new kind of audited action means adding a value here (a plain `ALTER TYPE ... ADD VALUE` migration, same pattern already used for `Role`/`PrintDocumentType`), not widening this into a string.
          * @enum {string}
          */
-        AuditAction: "BOOKING_CREATED" | "BOOKING_STATUS_CHANGED" | "BOOKING_PAYMENT_NOTE_CHANGED" | "BOOKING_SCHEDULE_CHANGED" | "BOOKING_ROOM_ASSIGNED" | "BOOKING_RELOCATED" | "BOOKING_RELOCATION_UNDONE" | "BOOKING_REPRICED" | "BOOKING_CHECKED_IN" | "BOOKING_CHECKED_OUT" | "BOOKING_NO_SHOW_MARKED" | "BOOKING_FOLIO_PAYMENT_RECORDED" | "BOOKINGS_EXPORTED" | "ROOM_PRICE_CHANGED" | "RATE_OVERRIDE_CHANGED" | "ORDER_CLOSED" | "ORDER_CANCELLED" | "ROOM_CHARGE_POSTED" | "SHIFT_OPENED" | "SHIFT_CLOSED" | "SHIFT_EXPORTED" | "USER_CREATED" | "USER_ROLE_CHANGED" | "USER_ACTIVE_CHANGED" | "USER_PASSWORD_RESET" | "USER_FUNCTIONS_CHANGED" | "USER_CREDENTIALS_GRANTED" | "USER_OVERTIME_ELIGIBILITY_CHANGED" | "USER_ENROLLMENT_NUMBER_CHANGED" | "USER_STAFF_AREA_CHANGED" | "USER_FULL_NAME_CHANGED" | "USER_NAME_CHANGED" | "ROOM_UNIT_CREATED" | "ROOM_UNIT_UPDATED" | "ROOM_UNIT_DELETED" | "ROOM_UNIT_BLOCK_CREATED" | "ROOM_UNIT_BLOCK_DELETED" | "ROOM_UNIT_HOUSEKEEPING_CHANGED" | "ROOM_UNIT_POSITION_UPDATED" | "PROPERTY_MAP_IMAGE_UPDATED" | "PRINT_JOB_DISMISSED" | "SPA_APPOINTMENT_CREATED" | "SPA_APPOINTMENT_STATUS_CHANGED" | "POS_TABLE_POSITION_UPDATED" | "MAINTENANCE_TASK_CREATED" | "MAINTENANCE_TASK_STATUS_CHANGED" | "MAINTENANCE_TASK_BLOCKED" | "MAINTENANCE_TASK_BLOCK_LIFTED" | "GUEST_CREATED" | "GUEST_UPDATED" | "GUEST_DELETED" | "BOOKING_GUEST_LINKED" | "SPA_MAP_IMAGE_UPDATED" | "BOOKING_SEGMENT_ROOM_CHANGED" | "BOOKING_ROOMS_SWAPPED" | "SPA_APPOINTMENT_RESCHEDULED" | "SPA_APPOINTMENT_TREATMENT_ADDED" | "SPA_APPOINTMENT_TREATMENT_REMOVED" | "SPA_APPOINTMENT_TABLES_SWAPPED" | "SHIFT_CODE_CREATED" | "SHIFT_CODE_KIND_CHANGED" | "SHIFT_CODE_DISPLAY_COLOR_CHANGED" | "SHIFT_CODE_VERSIONED" | "EMPLOYEE_PATTERN_CHANGED" | "ROSTER_ENTRY_CREATED" | "ROSTER_ENTRY_MOVED" | "ROSTER_ENTRY_REASSIGNED" | "ROSTER_ENTRIES_SWAPPED" | "ROSTER_ENTRY_DELETED" | "ROSTER_ENTRY_LOCKED_CHANGED" | "ROSTER_MONTH_GENERATED" | "ROSTER_MONTH_COPIED" | "STAFF_AREA_COVERAGE_RULE_CHANGED" | "ATTENDANCE_PUNCH_RECORDED" | "ATTENDANCE_PUNCH_CORRECTED" | "ATTENDANCE_DAY_CORRECTED" | "RECEIPT_SETTINGS_UPDATED" | "RECEIPT_LOGO_CHANGED" | "EMPLOYEE_PAY_RATE_CHANGED" | "ROSTER_ACTUALS_EXPORTED" | "ROSTER_MONTH_IMPORTED" | "ROSTER_GRID_EXPORTED" | "ROSTER_GRID_IMPORTED" | "ATTENDANCE_DEVICE_CREATED" | "ATTENDANCE_DEVICE_UPDATED" | "ATTENDANCE_DEVICE_DELETED" | "MENU_ITEM_CREATED" | "MENU_ITEM_UPDATED" | "MENU_ITEM_DELETED" | "REVENUE_EXPORTED" | "LIFECYCLE_EMAIL_SETTINGS_UPDATED" | "NIGHT_AUDIT_CLOSED" | "VAT_SETTINGS_UPDATED" | "LEDGER_ENTRY_POSTED" | "LEDGER_ENTRY_REVERSED" | "LEDGER_ACCOUNT_CREATED" | "SITEMINDER_ROOM_TYPE_MAPPING_CREATED" | "SITEMINDER_ROOM_TYPE_MAPPING_UPDATED" | "SITEMINDER_ROOM_TYPE_MAPPING_DELETED" | "RESTAURANT_MAP_IMAGE_UPDATED" | "ORDER_ITEM_VOIDED";
+        AuditAction: "BOOKING_CREATED" | "BOOKING_STATUS_CHANGED" | "BOOKING_PAYMENT_NOTE_CHANGED" | "BOOKING_SCHEDULE_CHANGED" | "BOOKING_ROOM_ASSIGNED" | "BOOKING_RELOCATED" | "BOOKING_RELOCATION_UNDONE" | "BOOKING_REPRICED" | "BOOKING_CHECKED_IN" | "BOOKING_CHECKED_OUT" | "BOOKING_NO_SHOW_MARKED" | "BOOKING_FOLIO_PAYMENT_RECORDED" | "BOOKINGS_EXPORTED" | "ROOM_PRICE_CHANGED" | "RATE_OVERRIDE_CHANGED" | "ORDER_CLOSED" | "ORDER_CANCELLED" | "ROOM_CHARGE_POSTED" | "SHIFT_OPENED" | "SHIFT_CLOSED" | "SHIFT_EXPORTED" | "USER_CREATED" | "USER_ROLE_CHANGED" | "USER_ACTIVE_CHANGED" | "USER_PASSWORD_RESET" | "USER_FUNCTIONS_CHANGED" | "USER_CREDENTIALS_GRANTED" | "USER_OVERTIME_ELIGIBILITY_CHANGED" | "USER_ENROLLMENT_NUMBER_CHANGED" | "USER_STAFF_AREA_CHANGED" | "USER_FULL_NAME_CHANGED" | "USER_NAME_CHANGED" | "ROOM_UNIT_CREATED" | "ROOM_UNIT_UPDATED" | "ROOM_UNIT_DELETED" | "ROOM_UNIT_BLOCK_CREATED" | "ROOM_UNIT_BLOCK_DELETED" | "ROOM_UNIT_HOUSEKEEPING_CHANGED" | "ROOM_UNIT_POSITION_UPDATED" | "PROPERTY_MAP_IMAGE_UPDATED" | "PRINT_JOB_DISMISSED" | "SPA_APPOINTMENT_CREATED" | "SPA_APPOINTMENT_STATUS_CHANGED" | "POS_TABLE_POSITION_UPDATED" | "MAINTENANCE_TASK_CREATED" | "MAINTENANCE_TASK_STATUS_CHANGED" | "MAINTENANCE_TASK_BLOCKED" | "MAINTENANCE_TASK_BLOCK_LIFTED" | "GUEST_CREATED" | "GUEST_UPDATED" | "GUEST_DELETED" | "BOOKING_GUEST_LINKED" | "SPA_MAP_IMAGE_UPDATED" | "BOOKING_SEGMENT_ROOM_CHANGED" | "BOOKING_ROOMS_SWAPPED" | "SPA_APPOINTMENT_RESCHEDULED" | "SPA_APPOINTMENT_TREATMENT_ADDED" | "SPA_APPOINTMENT_TREATMENT_REMOVED" | "SPA_APPOINTMENT_TABLES_SWAPPED" | "SHIFT_CODE_CREATED" | "SHIFT_CODE_KIND_CHANGED" | "SHIFT_CODE_DISPLAY_COLOR_CHANGED" | "SHIFT_CODE_VERSIONED" | "EMPLOYEE_PATTERN_CHANGED" | "ROSTER_ENTRY_CREATED" | "ROSTER_ENTRY_MOVED" | "ROSTER_ENTRY_REASSIGNED" | "ROSTER_ENTRIES_SWAPPED" | "ROSTER_ENTRY_DELETED" | "ROSTER_ENTRY_LOCKED_CHANGED" | "ROSTER_MONTH_GENERATED" | "ROSTER_MONTH_COPIED" | "STAFF_AREA_COVERAGE_RULE_CHANGED" | "ATTENDANCE_PUNCH_RECORDED" | "ATTENDANCE_PUNCH_CORRECTED" | "ATTENDANCE_DAY_CORRECTED" | "RECEIPT_SETTINGS_UPDATED" | "RECEIPT_LOGO_CHANGED" | "EMPLOYEE_PAY_RATE_CHANGED" | "ROSTER_ACTUALS_EXPORTED" | "ROSTER_MONTH_IMPORTED" | "ROSTER_GRID_EXPORTED" | "ROSTER_GRID_IMPORTED" | "ATTENDANCE_DEVICE_CREATED" | "ATTENDANCE_DEVICE_UPDATED" | "ATTENDANCE_DEVICE_DELETED" | "MENU_ITEM_CREATED" | "MENU_ITEM_UPDATED" | "MENU_ITEM_DELETED" | "REVENUE_EXPORTED" | "LIFECYCLE_EMAIL_SETTINGS_UPDATED" | "NIGHT_AUDIT_CLOSED" | "VAT_SETTINGS_UPDATED" | "LEDGER_ENTRY_POSTED" | "LEDGER_ENTRY_REVERSED" | "LEDGER_ACCOUNT_CREATED" | "SITEMINDER_ROOM_TYPE_MAPPING_CREATED" | "SITEMINDER_ROOM_TYPE_MAPPING_UPDATED" | "SITEMINDER_ROOM_TYPE_MAPPING_DELETED" | "RESTAURANT_MAP_IMAGE_UPDATED" | "ORDER_ITEM_VOIDED" | "GYM_DEVICE_COMMAND" | "GYM_DEVICE_CREATED" | "GYM_DEVICE_UPDATED" | "GYM_DEVICE_DELETED" | "GYM_RESERVATION_CREATED" | "GYM_RESERVATION_UPDATED" | "GYM_RESERVATION_CANCELLED" | "GYM_AUTOMATION_RESULT" | "GYM_HALL_SETTINGS_UPDATED" | "LIGHTING_DEVICE_CREATED" | "LIGHTING_DEVICE_UPDATED" | "LIGHTING_DEVICE_DELETED" | "LIGHTING_DEVICE_COMMAND" | "NOTIFICATION_SETTINGS_UPDATED" | "NOTIFICATION_LINK_CODE_CREATED" | "NOTIFICATION_CHANNEL_LINKED" | "NOTIFICATION_CHANNEL_UNLINKED" | "NOTIFICATION_LANGUAGE_UPDATED" | "SHIFT_CHANGE_REQUESTED" | "SHIFT_CHANGE_CANCELLED" | "SHIFT_CHANGE_APPROVED" | "SHIFT_CHANGE_REJECTED" | "SHIFT_CHANGE_EXPIRED" | "STAFF_BOT_SETTINGS_UPDATED" | "HR_VACATION_CHANGED" | "STAFF_EVE_REMINDER_CHANGED" | "STAFF_THERAPIST_MORNING_CHANGED";
         /**
          * @description Which kind of record `AuditLogEntry.entityId` refers to. Paired with `entityId` to look up one record's own history (e.g. a booking's). Values are SCREAMING_SNAKE_CASE, not the PascalCase entity class names, deliberately: Spring MVC's default `@RequestParam` enum conversion for a query parameter (unlike Jackson's JSON body deserialization) uses the enum constant's own `name()`, not a custom `@JsonValue` - a PascalCase value here would deserialize correctly in a JSON response body but fail to bind as a query parameter (`entityType=Booking` 400s while `entityType=BOOKING` works), which is exactly the asymmetry every other enum in this API avoids by keeping its JSON value identical to its Java constant name.
          * @enum {string}
          */
-        AuditEntityType: "BOOKING" | "ROOM" | "ORDER" | "SHIFT" | "USER" | "ROOM_UNIT" | "PROPERTY_MAP" | "PRINT_JOB" | "MAINTENANCE_TASK" | "TABLE" | "SPA_APPOINTMENT" | "GUEST" | "SPA_MAP" | "SHIFT_CODE" | "ROSTER_ENTRY" | "STAFF_AREA_COVERAGE_RULE" | "ATTENDANCE_PUNCH" | "EMPLOYEE_PAY_RATE" | "ATTENDANCE_DEVICE" | "MENU_ITEM" | "PAYMENT" | "SETTINGS" | "NIGHT_AUDIT" | "LEDGER_ENTRY" | "LEDGER_ACCOUNT" | "SITEMINDER_ROOM_TYPE_MAPPING" | "RESTAURANT_MAP";
+        AuditEntityType: "BOOKING" | "ROOM" | "ORDER" | "SHIFT" | "USER" | "ROOM_UNIT" | "PROPERTY_MAP" | "PRINT_JOB" | "MAINTENANCE_TASK" | "TABLE" | "SPA_APPOINTMENT" | "GUEST" | "SPA_MAP" | "SHIFT_CODE" | "ROSTER_ENTRY" | "STAFF_AREA_COVERAGE_RULE" | "ATTENDANCE_PUNCH" | "EMPLOYEE_PAY_RATE" | "ATTENDANCE_DEVICE" | "MENU_ITEM" | "PAYMENT" | "SETTINGS" | "NIGHT_AUDIT" | "LEDGER_ENTRY" | "LEDGER_ACCOUNT" | "SITEMINDER_ROOM_TYPE_MAPPING" | "RESTAURANT_MAP" | "GYM_DEVICE" | "GYM_RESERVATION" | "GYM_HALL_SETTINGS" | "LIGHTING_DEVICE" | "SHIFT_CHANGE_REQUEST";
         /** @description One row from the append-only audit log - see the AuditLog tag description for what gets recorded and why. `summary` is written in plain language by the service action that triggered it, meant to be read directly by a hotel manager, not reconstructed by the client from raw before/after field values - deliberately not a generic entity diff (see the backend's `AuditLogService` for the reasoning: a diff of every field is both harder to read and, for the fields that actually matter here, no more precise than a sentence written at the one point in the code that already knows what changed and why it matters). */
         AuditLogEntry: {
             id: string;
@@ -6146,7 +6995,7 @@ export interface components {
         ShiftCodeKindUpdateInput: {
             kind: components["schemas"]["ShiftCodeKind"];
         };
-        /** @description `GET /roster/employees` - deliberately narrower than `User`/`GET /users`, see that endpoint's own description. `name` is the field the roster grid displays and sorts by - unlike `email`, it's never absent, including for a no-login account (see `UserCreateInput`). */
+        /** @description `GET /roster/employees` - deliberately narrower than `User`/`GET /users`, see that endpoint's own description. `name` is the field the roster grid displays and sorts by - unlike `email`, it's never absent, including for a no-login account (see `UserCreateInput`). In `GET /roster` (`RosterMonth.employees`) a deactivated employee (`active: false`) is listed too when they have an entry or an attendance punch in that month - the same people the two Excel exports list - so a screen can show them greyed out; `GET /roster/employees` stays active-only. */
         RosterEmployee: {
             id: string;
             name: string;
@@ -6186,6 +7035,9 @@ export interface components {
             note?: string | null;
             /** @description "Do not move" - see `PATCH /roster/entries/{id}/lock`. */
             locked: boolean;
+            /** @description The id of a `PENDING` shift request on this entry (at most one); absent when there is none. */
+            pendingShiftRequestId?: string;
+            pendingShiftRequestType?: components["schemas"]["ShiftChangeRequestType"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -6581,6 +7433,7 @@ export interface components {
         TodayShiftState: "NOT_YET_ARRIVED" | "ON_SHIFT" | "FINISHED" | "SCHEDULED" | "ARRIVING_SOON" | "LATE" | "BETWEEN_SHIFTS" | "MISSED";
         /**
          * @description One employee's live status on `GET /attendance/today` - "who's on shift right now", not "who's scheduled this month" (`GET /attendance/summary`) or "what actually happened last month" (`GET /roster/actuals-export`). Employees with a `countsAsWorked` `RosterEntry` for today appear; an `ABSENCE`-kind entry (`PH` and the like) is absent from this list, the same "a day off is the absence of a row" convention `RosterEntry` itself already uses for the roster grid. The one addition: an employee with no `RosterEntry` at all today who has nevertheless punched today appears as if rostered on the active `OP` code for their staff area (`unscheduled: true`) - they are demonstrably working, and an open schedule is the one code that claims nothing about when. Display-time only: no `RosterEntry` is written, so the roster, its coverage counts and the planned side of every attendance report stay exactly what a manager planned. If no active `OP` code exists for their area (or area-less), they are left out rather than shown under an invented code.
+         *     Only active employees are listed: a deactivated employee never appears, even with a shift or a punch today. Their roster entries and punches are not touched, so reactivating them brings the shift back.
          *     `referenceTime` is deliberately one raw timestamp whose meaning switches with `state`, not a pre-formatted "in 23 minutes" string - the frontend derives (and re-derives, every poll tick) the relative time itself, so it never goes stale between polls on its own: `SCHEDULED`/`ARRIVING_SOON`/`LATE`/`BETWEEN_SHIFTS`/`MISSED` carry the current interval's own expected start time, today; `ON_SHIFT` carries the actual punch time of the trailing unmatched `IN`; `FINISHED` carries the punch time of the last completed pair's `OUT`; `NOT_YET_ARRIVED` carries nothing - there is genuinely nothing to report yet.
          */
         TodayShiftStatus: {
@@ -6626,11 +7479,13 @@ export interface components {
         /** @description `GET /night-audit` - see that operation for what each list contains. */
         NightAudit: {
             date: string;
-            /** @description Sorted by `checkIn`, oldest first. */
+            /** @description Arrivals still expected (`occupancyStatus` `EXPECTED`, not cancelled) whose stay is not over yet. Sorted by `checkIn`, oldest first. */
             missedArrivals: components["schemas"]["NightAuditBooking"][];
+            /** @description Stays whose dates have passed (`checkOut` before `date`) and whose guest never checked in - still `EXPECTED`, not `NO_SHOW`, not cancelled. The room is **not** a debt for them (`balanceDue` counts only other charges); the screen asks the desk to mark each one no-show or cancel it. Sorted by `checkIn`, oldest first. */
+            notArrived: components["schemas"]["NightAuditBooking"][];
             /** @description Sorted by `checkOut`, oldest first. */
             missedDepartures: components["schemas"]["NightAuditBooking"][];
-            /** @description Bookings whose stay is over (checked out, or `checkOut` on or before `date` and not still checked in) or that are `CANCELLED`, and that still owe money (`balanceDue` above zero) - whatever their `status`. Sorted by `checkOut`, oldest first. Each row carries `balanceDue`. */
+            /** @description Bookings whose stay is over (checked out, or `checkOut` on or before `date` and not still checked in) or that are `CANCELLED`, and that still owe money (a no-show or a never-arrived past stay owes no room - only other charges) (`balanceDue` above zero) - whatever their `status`. Sorted by `checkOut`, oldest first. Each row carries `balanceDue`. */
             unpaidBalances: components["schemas"]["NightAuditBooking"][];
             snapshot: components["schemas"]["OccupancyReportRow"];
             /** @description This date's closure, or null if nobody has closed it yet. */
@@ -7045,6 +7900,714 @@ export interface components {
             firstCheckIn: string;
             /** @description Latest `checkIn` among those bookings - can be in the future. */
             lastCheckIn: string;
+        };
+        /**
+         * @description `RELAY` is a Wi-Fi switch (a fan) whose real state Tuya reports; `AC_IR` is an air conditioner behind an IR hub, which is controlled one-way.
+         * @enum {string}
+         */
+        GymDeviceType: "RELAY" | "AC_IR";
+        /** @description One air-conditioner setting. Sent whole, also when switching off (`power` 0 with the remembered mode/temp/wind). */
+        GymAcCommandInput: {
+            /** @description 0 off, 1 on. */
+            power: number;
+            /** @description 0 cool, 1 heat, 2 auto, 3 fan, 4 dry. */
+            mode: number;
+            /** @description Target temperature, degrees Celsius. */
+            temp: number;
+            /** @description Fan speed - 0 auto, 1 to 3 low to high. */
+            wind: number;
+        };
+        /** @description The last command this server sent to an air conditioner - not a reading of the unit. */
+        GymAcCommand: {
+            power: number;
+            mode: number;
+            temp: number;
+            wind: number;
+            /** Format: date-time */
+            sentAt: string;
+            /** @description Name (or email) of the staff member at the time. */
+            sentBy: string;
+        };
+        GymRelayInput: {
+            isOn: boolean;
+        };
+        /** @description A gym device as the page shows it. For `RELAY`: `isOn`, `online` and `stateReadAt` come from Tuya (possibly the 30 s cache), `stateError` says why they are missing. For `AC_IR`: only `lastCommand` (null until the first command), no live state exists. */
+        GymDevice: {
+            id: string;
+            name: string;
+            type: components["schemas"]["GymDeviceType"];
+            sortOrder: number;
+            isOn?: boolean | null;
+            online?: boolean | null;
+            /** Format: date-time */
+            stateReadAt?: string | null;
+            stateError?: string | null;
+            lastCommand?: components["schemas"]["GymAcCommand"] | null;
+        };
+        GymStatus: {
+            /** @description The server has Tuya keys and an API base. Says nothing about whether Tuya is reachable. */
+            tuyaConfigured: boolean;
+            /** @description Active devices the reservation automation switches (`inBookings`). */
+            automatedDeviceCount: number;
+        };
+        GymDeviceList: {
+            devices: components["schemas"]["GymDevice"][];
+            /** Format: date-time */
+            fetchedAt: string;
+        };
+        GymDeviceConfig: {
+            id: string;
+            name: string;
+            type: components["schemas"]["GymDeviceType"];
+            /** @description Whether the reservation automation switches this device (default true for every device). */
+            inBookings: boolean;
+            tuyaDeviceId: string;
+            /** @description The IR hub (air conditioners only). */
+            infraredId?: string | null;
+            /** @description The IR remote (air conditioners only). */
+            remoteId?: string | null;
+            /** @description The status/command code of the on-off switch (relays only), e.g. `switch_1`. */
+            switchCode?: string | null;
+            sortOrder: number;
+            active: boolean;
+        };
+        /**
+         * @description `BOOKED` and `COMPLETED` hold the slot (the exclusion constraint is scoped to them); `CANCELLED` frees it. A `BOOKED` reservation turns `COMPLETED` by itself once its end has passed (the automation's sweep).
+         * @enum {string}
+         */
+        GymReservationStatus: "BOOKED" | "COMPLETED" | "CANCELLED";
+        GymAutomationDeviceResult: {
+            deviceName: string;
+            /**
+             * @description `PENDING` - still being tried (a failed attempt is retried on the next run, up to the attempt limit).
+             * @enum {string}
+             */
+            status: "PENDING" | "OK" | "FAILED" | "SKIPPED";
+            /**
+             * @description Why nothing was sent: the previous reservation had already switched it on (`COVERED_BY_PREVIOUS`), another reservation starts within the lead time so it stays on (`NEXT_BOOKING_SOON`), the reservation was over before the command was due (`MISSED`), the reservation was cancelled before switch-on (`CANCELLED`), the device was removed from settings (`DEVICE_REMOVED`).
+             * @enum {string|null}
+             */
+            skipReason?: "COVERED_BY_PREVIOUS" | "NEXT_BOOKING_SOON" | "MISSED" | "CANCELLED" | "DEVICE_REMOVED" | null;
+            /** @description Tuya's failure in plain words, for a `FAILED` (or retrying) device. */
+            error?: string | null;
+            attempts: number;
+        };
+        GymAutomationPhase: {
+            /**
+             * @description `OK` - every device did what was needed; `PARTIAL` - some did and some failed (see the `FAILED` results); `FAILED` - none did; `SKIPPED` - nothing was needed or possible (see `skipReason`); `PENDING` - commands still being tried.
+             * @enum {string}
+             */
+            state: "PENDING" | "OK" | "PARTIAL" | "FAILED" | "SKIPPED";
+            /**
+             * Format: date-time
+             * @description When the phase finished (the last device's outcome).
+             */
+            at?: string | null;
+            results: components["schemas"]["GymAutomationDeviceResult"][];
+        };
+        /** @description What the equipment automation (`GymAutomationService`) did around a reservation. `switchOn` is the switch-on that happens `leadMinutes` before the start, `switchOff` the switch-off at the end (or after a cancellation). A phase is absent until the automation reaches it. The automation only ever sends commands at these transitions - it never reads device state and never overrides a manual change in between. */
+        GymAutomation: {
+            switchOn?: components["schemas"]["GymAutomationPhase"];
+            switchOff?: components["schemas"]["GymAutomationPhase"];
+        };
+        /** @description A gym reservation as staff see it. */
+        GymReservation: {
+            id: string;
+            bookingId: string;
+            guestName: string;
+            roomLabel?: string | null;
+            date: string;
+            startTime: string;
+            endTime: string;
+            durationMinutes: number;
+            status: components["schemas"]["GymReservationStatus"];
+            /** @enum {string} */
+            createdByType: "GUEST" | "STAFF";
+            createdByName: string;
+            cancelledBy?: string | null;
+            cancelReason?: string | null;
+            automation: components["schemas"]["GymAutomation"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        GymSchedule: {
+            from: string;
+            to: string;
+            openTime: string;
+            closeTime: string;
+            stepMinutes: number;
+            minDurationMinutes: number;
+            maxDurationMinutes: number;
+            maxDailyMinutes: number;
+            reservations: components["schemas"]["GymReservation"][];
+        };
+        GymReservationCreateInput: {
+            bookingId: string;
+            date: string;
+            startTime: string;
+            /** @description 30, 60, 90 or 120. */
+            durationMinutes: number;
+        };
+        GymReservationScheduleInput: {
+            date: string;
+            startTime: string;
+            durationMinutes: number;
+        };
+        GymReservationCancelInput: {
+            reason?: string;
+        };
+        /** @description Opening hours and the automation parameters. `leadMinutes` is how long before a reservation the equipment is switched on, and also the gap between two reservations below which the equipment is not switched off in between. The air-conditioner values are the scene command sent at switch-on (`GymAcCommandInput`: mode 0 cool, temp 16..30, wind 0 auto / 1..3). Defaults: 06:00-22:00, 30 minutes, mode 0, 16 degrees, wind 3. */
+        GymHallSettings: {
+            openTime: string;
+            closeTime: string;
+            leadMinutes: number;
+            acMode: number;
+            acTemp: number;
+            acWind: number;
+        };
+        GymHallSettingsResult: {
+            settings: components["schemas"]["GymHallSettings"];
+            /** @description False when the new hours would leave reservations outside them and `force` was not set - nothing was written. */
+            saved: boolean;
+            /** @description Future `BOOKED` reservations that do not fit the requested hours (empty when the hours are not narrowed over any). */
+            outsideHours: components["schemas"]["GymReservation"][];
+        };
+        GymGuestStay: {
+            bookingId: string;
+            roomLabel: string | null;
+            checkIn: string;
+            checkOut: string;
+        };
+        GymGuestInfo: {
+            eligible: boolean;
+            /** @description Why the guest cannot book, in plain words; null when eligible. */
+            message?: string | null;
+            stays: components["schemas"]["GymGuestStay"][];
+            openTime: string;
+            closeTime: string;
+            stepMinutes: number;
+            minDurationMinutes: number;
+            maxDurationMinutes: number;
+            maxDailyMinutes: number;
+        };
+        GymSlot: {
+            startTime: string;
+            /**
+             * @description `DAILY_LIMIT` - the booking's 120 minutes for the day are used up.
+             * @enum {string}
+             */
+            status: "FREE" | "TAKEN" | "PAST" | "DAILY_LIMIT";
+            /** @description The longest session that can start here (0 unless `FREE`), a multiple of 30. */
+            maxDurationMinutes: number;
+        };
+        GymSlotDay: {
+            date: string;
+            bookingId: string;
+            openTime: string;
+            closeTime: string;
+            stepMinutes: number;
+            /** @description What is left of the booking's daily allowance on this date. */
+            remainingMinutes: number;
+            slots: components["schemas"]["GymSlot"][];
+        };
+        GymGuestReservationInput: {
+            /** @description Needed only when the account has several checked-in bookings. */
+            bookingId?: string;
+            date: string;
+            startTime: string;
+            durationMinutes: number;
+        };
+        /** @description A reservation as its guest sees it - no automation details, no staff names. */
+        GymGuestReservation: {
+            id: string;
+            bookingId: string;
+            date: string;
+            startTime: string;
+            endTime: string;
+            durationMinutes: number;
+            status: components["schemas"]["GymReservationStatus"];
+            /** @description True while the reservation is `BOOKED` and has not started. */
+            canCancel: boolean;
+        };
+        /** @description Full replacement on update. The type-specific fields are checked by the server (relay - `switchCode`; air conditioner - `infraredId`). */
+        GymDeviceConfigInput: {
+            name: string;
+            type: components["schemas"]["GymDeviceType"];
+            tuyaDeviceId: string;
+            infraredId?: string;
+            remoteId?: string;
+            switchCode?: string;
+            /** @default true */
+            active?: boolean;
+            /** @description Whether the reservation automation switches this device. Omitted - kept on update, true on create. */
+            inBookings?: boolean;
+        };
+        GymReorderInput: {
+            ids: string[];
+        };
+        /** @description A device of the Tuya project. Only what the add screen needs - never Tuya's `localKey`. */
+        TuyaDiscoveredDevice: {
+            id: string;
+            /** @description The name the owner gave it in the Tuya app, or Tuya's own name when none. */
+            name: string;
+            /** @description Tuya category code: `kg` switch, `wnykq` IR hub, `qt` an IR remote (a virtual device under a hub), `wxkg` wireless switch. */
+            category: string;
+            productName?: string | null;
+            online: boolean;
+            /** @description A sub-device (for the gym, an IR remote such as an air conditioner). */
+            sub: boolean;
+        };
+        TuyaRemote: {
+            remoteId: string;
+            name: string | null;
+        };
+        LightingDeviceConfig: {
+            id: string;
+            name: string;
+            host: string;
+            port: number;
+            /** @description Free text ("Pool bar, roof"), shown next to the name. */
+            location?: string | null;
+            active: boolean;
+            sortOrder: number;
+        };
+        LightingDeviceCreateInput: {
+            name: string;
+            /** @description IP address or hostname; must resolve to a private LAN address (see `POST /lighting/settings/devices`). */
+            host: string;
+            /** @default 80 */
+            port?: number;
+            location?: string;
+            /** @default true */
+            active?: boolean;
+        };
+        /** @description Partial update - only the fields present change. */
+        LightingDeviceUpdateInput: {
+            name?: string;
+            host?: string;
+            port?: number;
+            /** @description Empty string clears the location. */
+            location?: string;
+            active?: boolean;
+        };
+        LightingReorderInput: {
+            ids: string[];
+        };
+        LightingDeviceCheckInput: {
+            host: string;
+            /** @default 80 */
+            port?: number;
+        };
+        /** @description What the controller's `/json/info` says about itself. */
+        LightingDeviceInfo: {
+            /** @description The controller's own friendly name. */
+            name: string;
+            /** @description WLED version (`ver`), for example `0.15.0`. */
+            version: string;
+            ledCount: number;
+            /** @description Lower case, no colons, as WLED reports it. */
+            mac: string;
+        };
+        LightingDeviceCheckResult: {
+            reachable: boolean;
+            /** @description Short plain-words reason when `reachable` is false. Never contains what the device sent back. */
+            error?: string;
+            info?: components["schemas"]["LightingDeviceInfo"];
+        };
+        LightingPreset: {
+            /** @description WLED preset id, 1-250 - what `presetId` takes. */
+            id: number;
+            name: string;
+        };
+        /** @description A controller with its live state. When `online` is false, `isOn`, `brightness` and `presetId` are absent and `stateError` says why. */
+        LightingDevice: {
+            id: string;
+            name: string;
+            location?: string | null;
+            sortOrder?: number;
+            online: boolean;
+            /** @description Whether the lights are on. Absent when offline. */
+            isOn?: boolean;
+            /** @description WLED's `bri` - the last brightness when the lights are off. Absent when offline. */
+            brightness?: number;
+            /** @description The preset currently applied; null when none (WLED clears it when the look is changed by hand). Absent when offline. */
+            presetId?: number | null;
+            /** @description Presets stored on this controller (they differ per controller); empty when offline or when they could not be read. */
+            presets: components["schemas"]["LightingPreset"][];
+            /**
+             * Format: date-time
+             * @description When the state was read from the controller (it may be a few seconds old - see the cache note on the list).
+             */
+            stateReadAt?: string;
+            stateError?: string;
+        };
+        LightingStatus: {
+            /** @description False when the server has no `LIGHTING_ALLOWED_CIDRS` - lighting is then off. */
+            configured: boolean;
+        };
+        LightingDeviceList: {
+            /** @description Same as `GET /lighting/status`. When false, `devices` is empty. */
+            configured: boolean;
+            devices: components["schemas"]["LightingDevice"][];
+            /** Format: date-time */
+            fetchedAt: string;
+        };
+        /** @description At least one field. */
+        LightingStateInput: {
+            isOn?: boolean;
+            brightness?: number;
+            presetId?: number;
+        };
+        GymTuyaUsage: {
+            /** @description Calendar month in hotel (Bangkok) time. */
+            month: string;
+            /**
+             * Format: int64
+             * @description Calls to Tuya this server made in that month, token requests included.
+             */
+            calls: number;
+            /** @description The trial's monthly quota as configured (`app.tuya.monthly-quota-hint`) - about 26 000, informational only. */
+            quotaHint: number;
+        };
+        /**
+         * @description Where a notification is delivered. Only Telegram today; LINE and WhatsApp are added as further values.
+         * @enum {string}
+         */
+        NotificationChannel: "TELEGRAM";
+        /**
+         * @description Language of a notification text. The Thai texts are a first translation that still needs a native speaker's review.
+         * @enum {string}
+         */
+        NotificationLanguage: "EN" | "TH" | "RU";
+        /**
+         * @description `LATE` - an employee has not clocked in `lateGraceMinutes` after the planned start of a shift interval (to them and to the late-recipients). `ABSENT` - still not there `absenceMinutes` after it (to the director recipients). `BLOCK_CREATED`, `BLOCK_LAST_DAY` (the morning of the block's last day) and `BLOCK_EXPIRED_OPEN` (every morning while the block's maintenance task is not DONE) go to whoever is on shift with the block's responsible function, otherwise to the director recipients. `TERMINAL_OFFLINE` / `TERMINAL_ONLINE` - an attendance terminal went silent / came back (to the director recipients). `SHIFT_REQUEST_NEW` - a shift request waits for a decision (to the deciders, with Approve / Reject buttons in Telegram); `SHIFT_REQUEST_DECIDED` / `SHIFT_REQUEST_EXPIRED` - the outcome (to the employee); `SHIFT_REQUEST_REMINDER` - a request has waited too long (to the deciders); `SHIFT_EVE_REMINDER` - tomorrow's shift, the evening before, to those who asked for it; `ROSTER_CHANGED` - a manager changed an employee's shift on a day (one message per employee and day); `MORNING_SUMMARY` - the hotel's morning summary (arrivals, departures, in house, occupancy, rooms, staff, waiting requests) to the director recipients, once a day; `THERAPIST_MORNING` - "N procedures today, the first at 10:00", to a therapist who switched it on, once a day.
+         * @enum {string}
+         */
+        NotificationType: "LATE" | "ABSENT" | "BLOCK_CREATED" | "BLOCK_LAST_DAY" | "BLOCK_EXPIRED_OPEN" | "TERMINAL_OFFLINE" | "TERMINAL_ONLINE" | "SHIFT_REQUEST_NEW" | "SHIFT_REQUEST_DECIDED" | "SHIFT_REQUEST_EXPIRED" | "SHIFT_REQUEST_REMINDER" | "SHIFT_EVE_REMINDER" | "ROSTER_CHANGED" | "MORNING_SUMMARY" | "THERAPIST_MORNING";
+        /** @enum {string} */
+        NotificationDeliveryStatus: "PENDING" | "SENT" | "FAILED" | "NO_CHANNEL";
+        /**
+         * @description Who is answerable for closing a room block. A subset of `JobFunction`.
+         * @enum {string}
+         */
+        BlockResponsibleFunction: "ENGINEER" | "HOUSEKEEPER";
+        /**
+         * @description `MOVE` - the employee asks to work the same shift on another day (`targetDate`). `DELETE` - they ask to be off that day; approving removes the roster entry.
+         * @enum {string}
+         */
+        ShiftChangeRequestType: "MOVE" | "DELETE";
+        /**
+         * @description `PENDING` until decided. `APPROVED` / `REJECTED` by a decider, `CANCELLED` withdrawn, `EXPIRED` - the shift began undecided, or the entry changed after the request was filed so nothing was applied (`expiredReason` says which).
+         * @enum {string}
+         */
+        ShiftChangeRequestStatus: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED" | "EXPIRED";
+        /** @enum {string} */
+        ShiftChangeRequestChannel: "TELEGRAM" | "ADMIN_UI";
+        /** @description How many people of the employee's department (`User.staffArea`) would still work on the day(s) concerned if the request were approved, against the department's minimum (`StaffAreaCoverageRule`). Counted exactly like the roster grid's coverage. A warning for the decider, never a block. Absent when the employee has no department or the department has no minimum. */
+        ShiftRequestCoverage: {
+            staffArea: components["schemas"]["StaffArea"];
+            minimumWorking: number;
+            sourceDate: string;
+            /** @description Working on `sourceDate` after the employee leaves it. */
+            sourceWorkingAfter: number;
+            targetDate?: string;
+            /** @description Working on `targetDate` after the employee joins it (MOVE only). */
+            targetWorkingAfter?: number;
+            /** @description True when either day would be below the minimum. */
+            belowMinimum: boolean;
+        };
+        ShiftChangeRequest: {
+            id: string;
+            employeeUserId: string;
+            employeeName: string;
+            /** @description The entry concerned; absent once that entry has been deleted. */
+            rosterEntryId?: string;
+            type: components["schemas"]["ShiftChangeRequestType"];
+            status: components["schemas"]["ShiftChangeRequestStatus"];
+            channel: components["schemas"]["ShiftChangeRequestChannel"];
+            /** @description The employee's reason (up to 300 characters). Absent when none was required or given. */
+            reason?: string;
+            /** @description The date of the shift when the request was filed. */
+            shiftDate: string;
+            /** @description The shift code's text when the request was filed (a snapshot). */
+            shiftCode: string;
+            /** @description The shift's intervals when the request was filed, like `09:00-18:00` or `09:00-13:00, 17:00-21:00`. Absent for a code without times. */
+            shiftTimes?: string;
+            /** @description MOVE only. */
+            targetDate?: string;
+            /** @description Present only while the request is `PENDING` (what a decision would do to the department *now*; a settled request has no such figure), and only when the employee has a department with a minimum. */
+            coverage?: components["schemas"]["ShiftRequestCoverage"];
+            /** Format: date-time */
+            createdAt: string;
+            decidedByUserId?: string;
+            decidedByName?: string;
+            /** Format: date-time */
+            decidedAt?: string;
+            decisionComment?: string;
+            /** @description Our own words for why a request became `EXPIRED`. */
+            expiredReason?: string;
+            /** @description True when the caller is one of today's deciders for *this* request and it is still `PENDING`. */
+            callerMayDecide: boolean;
+            /** @description True when the request was filed by the HR director: the HR director never decides their own request, so an administrator does (even with `fallbackToAdmin` off). `callerMayDecide` is then false for the HR director and the screen should say who decides instead. */
+            requiresAdministrator: boolean;
+        };
+        ShiftChangeDecisionInput: {
+            /** @enum {string} */
+            decision: "APPROVE" | "REJECT";
+            /** @description Shown to the employee with the decision. */
+            comment?: string;
+        };
+        ShiftRequestDeciders: {
+            /** @description The active holder of the `HR` job function; absent when nobody holds it. */
+            hrUserId?: string;
+            hrName?: string;
+            vacationFrom?: string;
+            vacationTo?: string;
+            onVacationToday: boolean;
+            fallbackToAdmin: boolean;
+            /** @description Names of those who decide today - the `HR` holder, or the administrators while there is none / they are away and `fallbackToAdmin` is on. Empty means requests wait. */
+            effectiveDeciders: string[];
+            callerMayDecide: boolean;
+        };
+        /** @description Both dates, or neither to clear the leave. */
+        HrVacationInput: {
+            from?: string;
+            to?: string;
+        };
+        /** @description What the staff Telegram bot offers and how shift requests behave - the one row V150 seeds, separate from `NotificationSettings` (alerts) because it is a different feature with its own defaults. Every threshold, time and switch the bot uses is here; none is a constant in code. */
+        StaffBotSettings: {
+            /** @description The "My shifts" command. */
+            myShiftsEnabled: boolean;
+            /** @description The "My day" command (today's shift and the employee's own punches). */
+            myDayEnabled: boolean;
+            /** @description The "My month" command (planned and worked days and hours). */
+            myMonthEnabled: boolean;
+            /** @description The "My requests" command. */
+            myRequestsEnabled: boolean;
+            /** @description The bot's own "Settings" command (language, evening-before reminder). */
+            botSettingsEnabled: boolean;
+            /** @description Master switch for shift requests - filing, the deciders' list and the messages about them. */
+            requestsEnabled: boolean;
+            moveRequestsEnabled: boolean;
+            deleteRequestsEnabled: boolean;
+            /** @description A request must be filed at least this many hours before the shift starts (default 24). */
+            requestMinHoursBefore: number;
+            /** @description Allow a request for today's shift (still subject to `requestMinHoursBefore`). Default off. */
+            allowTodayRequests: boolean;
+            /** @description A shift can be moved to a day at most this many days ahead (default 14). */
+            moveWindowDays: number;
+            /** @description The employee must give a reason (up to 300 characters). Default on. */
+            reasonRequired: boolean;
+            /** @description How many days ahead "My shifts" shows (default 14). */
+            myShiftsDays: number;
+            /** @description Administrators decide while nobody holds `HR` or the holder is on leave (default on). With it off those requests wait - except a request filed by the HR director themself: it is never decided by them, so it always goes to the administrators, whatever this switch says (otherwise nobody could decide it). */
+            fallbackToAdmin: boolean;
+            pendingReminderEnabled: boolean;
+            /** @description Remind the deciders of a request waiting this long, at most once a day per request (default 12). */
+            pendingReminderHours: number;
+            /** @description The evening-before reminder feature as a whole. */
+            eveReminderEnabled: boolean;
+            /** @description Hotel time, `HH:mm` (default 18:00). */
+            eveReminderTime: string;
+            /** @description Whether an employee who never chose gets the reminder (default off). Each employee overrides it in the bot. */
+            eveReminderDefaultOn: boolean;
+            /** @description Tell an employee when a manager changed their shift. Only the manual gestures of the roster grid (create, move, delete, reassign, swap) are announced; the month generator, "copy a month" and the Excel imports are bulk set-up and never send this message. */
+            rosterChangeEnabled: boolean;
+            /** @description Only changes to shifts within this many days ahead are announced (default 14). */
+            rosterChangeHorizonDays: number;
+            /** @description A change is announced this long after the last change to that employee and day, as one message with the final state (default 10). */
+            rosterChangeDelayMinutes: number;
+            /** @description The engineer's "Tasks" screen: open maintenance tasks with Start / Done (ENGINEER, MANAGER+ as the fallback). Default on. */
+            engineerTasksEnabled: boolean;
+            /** @description The housekeeper's "Blocks" screen: room blocks the housekeeping function is answerable for, read only. Default on. */
+            housekeeperBlocksEnabled: boolean;
+            /** @description Blocks that are on now or start within this many days are listed (default 7). */
+            housekeeperBlocksDays: number;
+            /** @description The therapist's "My procedures" screen. Default on. */
+            therapistScheduleEnabled: boolean;
+            /** @description How many days, today included, the My procedures screen shows (default 2). */
+            therapistScheduleDays: number;
+            /** @description The automatic morning message "N procedures today, the first at 10:00" to therapists who switched it on themselves. Default on (nothing is sent until a therapist opts in). */
+            therapistMorningEnabled: boolean;
+            /** @description Hotel time, `HH:mm`, from which the therapists' morning message goes (default 08:00). */
+            therapistMorningTime: string;
+            /** @description Whether a therapist who never chose gets the morning message. Default off; each therapist overrides it in the bot's Settings. */
+            therapistMorningDefaultOn: boolean;
+            /** @description The "Who is on shift" screen for managers. Default on. */
+            whoIsOnShiftEnabled: boolean;
+            /** @description Whether the HR director, who is not a manager, also sees "Who is on shift" (they can already read attendance). Default on. */
+            whoIsOnShiftForHr: boolean;
+            /** @description The "Summary" command for MANAGER+. Default on. */
+            summaryCommandEnabled: boolean;
+            /** @description The automatic morning summary to the director recipients of `NotificationSettings`. Default on. */
+            morningSummaryEnabled: boolean;
+            /** @description Hotel time, `HH:mm`, from which the morning summary goes (default 08:00). */
+            morningSummaryTime: string;
+            /** @description Summary block: arrivals today. Default on. */
+            summaryArrivals: boolean;
+            /** @description Summary block: departures today and overdue departures. Default on. */
+            summaryDepartures: boolean;
+            /** @description Summary block: rooms and guests in the house. Default on. */
+            summaryInHouse: boolean;
+            /** @description Summary block: occupancy today and rooms still free tonight. Default on. */
+            summaryOccupancy: boolean;
+            /** @description Summary block: rooms blocked and rooms waiting to be cleaned. Default on. */
+            summaryRooms: boolean;
+            /** @description Summary block: staff on the roster, on shift now and absent. Default on. */
+            summaryStaff: boolean;
+            /** @description Summary block: shift requests waiting for a decision. Default on. */
+            summaryRequests: boolean;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description Body of `PUT /settings/staff-bot` - every field of `StaffBotSettings` except `updatedAt`. */
+        StaffBotSettingsUpdateInput: {
+            myShiftsEnabled: boolean;
+            myDayEnabled: boolean;
+            myMonthEnabled: boolean;
+            myRequestsEnabled: boolean;
+            botSettingsEnabled: boolean;
+            requestsEnabled: boolean;
+            moveRequestsEnabled: boolean;
+            deleteRequestsEnabled: boolean;
+            requestMinHoursBefore: number;
+            allowTodayRequests: boolean;
+            moveWindowDays: number;
+            reasonRequired: boolean;
+            myShiftsDays: number;
+            fallbackToAdmin: boolean;
+            pendingReminderEnabled: boolean;
+            pendingReminderHours: number;
+            eveReminderEnabled: boolean;
+            eveReminderTime: string;
+            eveReminderDefaultOn: boolean;
+            rosterChangeEnabled: boolean;
+            rosterChangeHorizonDays: number;
+            rosterChangeDelayMinutes: number;
+            engineerTasksEnabled: boolean;
+            housekeeperBlocksEnabled: boolean;
+            housekeeperBlocksDays: number;
+            therapistScheduleEnabled: boolean;
+            therapistScheduleDays: number;
+            therapistMorningEnabled: boolean;
+            therapistMorningTime: string;
+            therapistMorningDefaultOn: boolean;
+            whoIsOnShiftEnabled: boolean;
+            whoIsOnShiftForHr: boolean;
+            summaryCommandEnabled: boolean;
+            morningSummaryEnabled: boolean;
+            morningSummaryTime: string;
+            summaryArrivals: boolean;
+            summaryDepartures: boolean;
+            summaryInHouse: boolean;
+            summaryOccupancy: boolean;
+            summaryRooms: boolean;
+            summaryStaff: boolean;
+            summaryRequests: boolean;
+        };
+        NotificationStatus: {
+            /** @description False when the server has no `TELEGRAM_BOT_TOKEN` - nothing is polled or sent then. */
+            telegramConfigured: boolean;
+            /** @description The bot's name from Telegram's `getMe`, without the `@`. Null while unknown (or when not configured). */
+            botUsername?: string | null;
+        };
+        NotificationSettings: {
+            lateEnabled: boolean;
+            /** @description Minutes after the planned start of an interval before "late" is sent. Not below `minLateGraceMinutes`. */
+            lateGraceMinutes: number;
+            /** @description The attendance terminal's poll interval in minutes (currently 5) - the lowest grace the server accepts. */
+            readonly minLateGraceMinutes: number;
+            absenceEnabled: boolean;
+            /** @description Minutes after the planned start of an interval before the directors are told the employee is absent. */
+            absenceMinutes: number;
+            blockCreatedEnabled: boolean;
+            blockLastDayEnabled: boolean;
+            blockExpiredEnabled: boolean;
+            terminalAlertsEnabled: boolean;
+            /** @description A terminal not reached for longer than this is "silent". While any active terminal is silent, no late or absence message is raised (its punches cannot be seen), and the directors are told once instead. */
+            terminalSilenceMinutes: number;
+            quietHoursEnabled: boolean;
+            /** @description Hotel time (Asia/Bangkok), inclusive. The window may cross midnight. */
+            quietStart: string;
+            /** @description Hotel time, exclusive. Messages raised during quiet hours are sent at this time. */
+            quietEnd: string;
+            /** @description Hotel time of the morning block reminders (last day, expired block with an open task). */
+            morningTime: string;
+            defaultLanguage: components["schemas"]["NotificationLanguage"];
+            /** @description Besides the employee themself, who is told that an employee is late. */
+            lateRecipientUserIds: string[];
+            /** @description Who is told about absences, terminal outages and blocks nobody on shift can take. */
+            directorUserIds: string[];
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description Body of `PUT /settings/notifications` - every field of `NotificationSettings` except `minLateGraceMinutes` and `updatedAt`. */
+        NotificationSettingsUpdateInput: {
+            lateEnabled: boolean;
+            lateGraceMinutes: number;
+            absenceEnabled: boolean;
+            absenceMinutes: number;
+            blockCreatedEnabled: boolean;
+            blockLastDayEnabled: boolean;
+            blockExpiredEnabled: boolean;
+            terminalAlertsEnabled: boolean;
+            terminalSilenceMinutes: number;
+            quietHoursEnabled: boolean;
+            quietStart: string;
+            quietEnd: string;
+            morningTime: string;
+            defaultLanguage: components["schemas"]["NotificationLanguage"];
+            lateRecipientUserIds: string[];
+            directorUserIds: string[];
+        };
+        NotificationStaffMember: {
+            userId: string;
+            name: string;
+            role: components["schemas"]["Role"];
+            isActive: boolean;
+            language?: components["schemas"]["NotificationLanguage"];
+            telegramLinked: boolean;
+            /**
+             * Format: date-time
+             * @description When the chat was linked; absent when not linked.
+             */
+            telegramLinkedAt?: string;
+        };
+        /** @description Body of `PUT /notifications/staff/{userId}/language`. `language` omitted or null clears it. */
+        NotificationLanguageInput: {
+            language?: components["schemas"]["NotificationLanguage"];
+        };
+        NotificationLinkCodeInput: {
+            userId: string;
+        };
+        NotificationLinkCode: {
+            userId: string;
+            /** @description `https://t.me/<bot>?start=<code>` - open it or show it as a QR. Single use, valid until `expiresAt`. */
+            url: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        NotificationLogEntry: {
+            id: string;
+            type: components["schemas"]["NotificationType"];
+            recipientUserId: string;
+            recipientName: string;
+            language: components["schemas"]["NotificationLanguage"];
+            /** @description The message exactly as it was written for the recipient. */
+            text: string;
+            /** Format: date-time */
+            createdAt: string;
+            deliveryStatus: components["schemas"]["NotificationDeliveryStatus"];
+            attempts: number;
+            /**
+             * Format: date-time
+             * @description While `PENDING`, the earliest moment it will be sent (the end of quiet hours, or the next retry).
+             */
+            sendAfter?: string;
+            /** Format: date-time */
+            sentAt?: string;
+            /** @description Why the last attempt failed, in our own words. */
+            error?: string;
         };
     };
     responses: {
@@ -13950,6 +15513,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorMessage"];
                 };
             };
+            /** @description Another active user already holds the `HR` function. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
         };
     };
     resetUserPassword: {
@@ -14109,6 +15681,15 @@ export interface operations {
                      *       "error": "User not found"
                      *     }
                      */
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Re-enabling would give the `HR` function to a second active user. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
                     "application/json": components["schemas"]["ErrorMessage"];
                 };
             };
@@ -16542,6 +18123,1840 @@ export interface operations {
                      *       "error": "Mapping not found"
                      *     }
                      */
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    listGymReservations: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+                includeCancelled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymSchedule"];
+                };
+            };
+            /** @description Bad dates, `to` before `from`, or a range longer than 14 days. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenCashierPlus"];
+        };
+    };
+    createGymReservation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymReservationCreateInput"];
+            };
+        };
+        responses: {
+            /** @description Reserved. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymReservation"];
+                };
+            };
+            /** @description The slot breaks a rule (grid, duration, opening hours, past, outside the stay). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenCashierPlus"];
+            /** @description Booking not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The slot is taken, the daily limit is used up, or the booking is cancelled / checked out / a no-show. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    updateGymReservationSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymReservationScheduleInput"];
+            };
+        };
+        responses: {
+            /** @description The moved reservation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymReservation"];
+                };
+            };
+            /** @description The new slot breaks a rule. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenCashierPlus"];
+            /** @description Reservation not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The slot is taken, the daily limit is used up, the reservation is not `BOOKED`, or the automation already started on it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    cancelGymReservation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["GymReservationCancelInput"];
+            };
+        };
+        responses: {
+            /** @description The cancelled reservation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymReservation"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenCashierPlus"];
+            /** @description Reservation not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The reservation is not `BOOKED` (already cancelled or over). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    getGymHallSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymHallSettings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateGymHallSettings: {
+        parameters: {
+            query?: {
+                force?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymHallSettings"];
+            };
+        };
+        responses: {
+            /** @description The settings (as saved, or as they still are when `saved` is false) and the reservations outside the new hours. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymHallSettingsResult"];
+                };
+            };
+            /** @description Body failed validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getGuestGymInfo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Eligibility and rules. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymGuestInfo"];
+                };
+            };
+            /** @description Missing/invalid/expired guest token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    getGuestGymSlots: {
+        parameters: {
+            query: {
+                date: string;
+                bookingId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The day's slots. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymSlotDay"];
+                };
+            };
+            /** @description Bad date, outside the stay, or several eligible bookings and none chosen. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Missing/invalid/expired guest token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The guest has no checked-in booking. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    listGuestGymReservations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The reservations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymGuestReservation"][];
+                };
+            };
+            /** @description Missing/invalid/expired guest token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    createGuestGymReservation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymGuestReservationInput"];
+            };
+        };
+        responses: {
+            /** @description Reserved. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymGuestReservation"];
+                };
+            };
+            /** @description The slot breaks a rule, or several eligible bookings and none chosen. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Missing/invalid/expired guest token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The guest has no checked-in booking. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The slot is taken or the daily limit is used up. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    cancelGuestGymReservation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cancelled reservation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymGuestReservation"];
+                };
+            };
+            /** @description Missing/invalid/expired guest token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Reservation not found (or not this guest's). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Already started, already cancelled, or over. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    listGymDevices: {
+        parameters: {
+            query?: {
+                refresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active gym devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymDeviceList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenCashierPlus"];
+        };
+    };
+    setGymRelay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymRelayInput"];
+            };
+        };
+        responses: {
+            /** @description The relay after the command. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymDevice"];
+                };
+            };
+            /** @description Body failed validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenCashierPlus"];
+            /** @description Device not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Not a relay, or the device is disabled. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Tuya rejected the command or could not be reached; `error` says why in plain words. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The Tuya integration is not configured or the project is unavailable (subscription expired). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    sendGymAcCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymAcCommandInput"];
+            };
+        };
+        responses: {
+            /** @description The device with its new `lastCommand`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymDevice"];
+                };
+            };
+            /** @description Body failed validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenCashierPlus"];
+            /** @description Device not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Not an air conditioner, or the device is disabled. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Tuya rejected the command or could not be reached. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The Tuya integration is not configured or the project is unavailable (subscription expired). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    getGymStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenCashierPlus"];
+        };
+    };
+    listGymDeviceConfigs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All configured devices in display order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymDeviceConfig"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createGymDeviceConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymDeviceConfigInput"];
+            };
+        };
+        responses: {
+            /** @description Device added. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymDeviceConfig"];
+                };
+            };
+            /** @description Body failed validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description This Tuya device is already configured. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    reorderGymDeviceConfigs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymReorderInput"];
+            };
+        };
+        responses: {
+            /** @description The devices in the new order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymDeviceConfig"][];
+                };
+            };
+            /** @description The list is not exactly the configured devices. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateGymDeviceConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymDeviceConfigInput"];
+            };
+        };
+        responses: {
+            /** @description Updated device. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymDeviceConfig"];
+                };
+            };
+            /** @description Body failed validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Device not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Another configured device already uses this Tuya device. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    deleteGymDeviceConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkTrue"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Device not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    listTuyaDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Devices in the project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TuyaDiscoveredDevice"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Tuya rejected the request or could not be reached. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The Tuya integration is not configured or the project is unavailable (subscription expired). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    listTuyaSwitchCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tuyaDeviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Boolean status codes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Tuya rejected the request or could not be reached. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The Tuya integration is not configured or the project is unavailable (subscription expired). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    listTuyaInfraredRemotes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                infraredId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Remotes of the hub. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TuyaRemote"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Tuya rejected the request or could not be reached. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The Tuya integration is not configured, the project is unavailable, or this API is not subscribed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    getGymTuyaUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counter for the current month. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymTuyaUsage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getNotificationSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationSettings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateNotificationSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationSettingsUpdateInput"];
+            };
+        };
+        responses: {
+            /** @description The updated settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationSettings"];
+                };
+            };
+            /** @description Body failed validation, or a rule above was broken. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"] | components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getStaffBotSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffBotSettings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateStaffBotSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StaffBotSettingsUpdateInput"];
+            };
+        };
+        responses: {
+            /** @description The updated settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffBotSettings"];
+                };
+            };
+            /** @description Body failed validation, or a rule above was broken. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"] | components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listShiftChangeRequests: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["ShiftChangeRequestStatus"];
+                from?: string;
+                to?: string;
+                employeeUserId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShiftChangeRequest"][];
+                };
+            };
+            /** @description A date is malformed, or `from` is after `to`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"] | components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getShiftRequestDeciders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current arrangement. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShiftRequestDeciders"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    setHrVacation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HrVacationInput"];
+            };
+        };
+        responses: {
+            /** @description The arrangement after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShiftRequestDeciders"];
+                };
+            };
+            /** @description Dates malformed, only one given, or `to` before `from`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"] | components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Nobody holds the `HR` function, or the caller is not allowed to set it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    decideShiftChangeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShiftChangeDecisionInput"];
+            };
+        };
+        responses: {
+            /** @description The request as it stands after this call. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShiftChangeRequest"];
+                };
+            };
+            /** @description Comment too long. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"] | components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such request. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    cancelShiftChangeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request as it stands after this call. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShiftChangeRequest"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such request. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    getNotificationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    listNotificationStaff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The staff. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationStaffMember"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    setNotificationStaffLanguage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationLanguageInput"];
+            };
+        };
+        responses: {
+            /** @description The employee as it is now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationStaffMember"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+            /** @description No such user. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    createNotificationLinkCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationLinkCodeInput"];
+            };
+        };
+        responses: {
+            /** @description The code. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationLinkCode"];
+                };
+            };
+            /** @description Body failed validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"] | components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+            /** @description No such user. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Telegram is not configured, the bot is not known yet, or the employee is deactivated. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    deleteNotificationLink: {
+        parameters: {
+            query?: {
+                channel?: components["schemas"]["NotificationChannel"];
+            };
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unlinked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+            /** @description Nothing was linked. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    listNotificationLog: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                type?: components["schemas"]["NotificationType"];
+                deliveryStatus?: components["schemas"]["NotificationDeliveryStatus"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationLogEntry"][];
+                };
+            };
+            /** @description A date that is not YYYY-MM-DD, or `from` after `to`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    getLightingStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightingStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    listLightingDevices: {
+        parameters: {
+            query?: {
+                refresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active controllers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightingDeviceList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    setLightingState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LightingStateInput"];
+            };
+        };
+        responses: {
+            /** @description The controller after the command. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightingDevice"];
+                };
+            };
+            /** @description Body failed validation, or carries none of the three fields. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+            /** @description Controller not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The controller is disabled in settings, or lighting is not configured on the server. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description The controller could not be reached or refused the command; `error` names it. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    listLightingDeviceConfigs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All configured controllers in display order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightingDeviceConfig"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createLightingDeviceConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LightingDeviceCreateInput"];
+            };
+        };
+        responses: {
+            /** @description Controller added. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightingDeviceConfig"];
+                };
+            };
+            /** @description Body failed validation, or `host` is not an allowed address. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Another controller already has this name, or lighting is not configured on the server. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    checkLightingDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LightingDeviceCheckInput"];
+            };
+        };
+        responses: {
+            /** @description The outcome of the test. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightingDeviceCheckResult"];
+                };
+            };
+            /** @description Body failed validation, or `host` is not an allowed address. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Lighting is not configured on the server. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    reorderLightingDeviceConfigs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LightingReorderInput"];
+            };
+        };
+        responses: {
+            /** @description The controllers in the new order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightingDeviceConfig"][];
+                };
+            };
+            /** @description The list is not exactly the configured controllers. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    deleteLightingDeviceConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkTrue"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Controller not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
+    updateLightingDeviceConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LightingDeviceUpdateInput"];
+            };
+        };
+        responses: {
+            /** @description Updated controller. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightingDeviceConfig"];
+                };
+            };
+            /** @description Body failed validation, or `host` is not an allowed address. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Controller not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+            /** @description Another controller already has this name, or `host`/`port` changed while lighting is not configured on the server. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
                     "application/json": components["schemas"]["ErrorMessage"];
                 };
             };

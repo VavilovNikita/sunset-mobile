@@ -35,6 +35,24 @@ describe("what each role can do (mirrors SecurityConfig)", () => {
   });
 });
 
+describe("HR opens nothing in the app", () => {
+  // The HR director decides shift requests on the web admin and in the Telegram bot; none of that is in this app,
+  // and a function never lifts the role: an HR waiter sees exactly what a plain waiter sees.
+  it("a WAITER with HR gets the same capabilities and the same menu as a plain WAITER", () => {
+    const capabilities: Capability[] = [
+      "pos.use", "pos.takePayment", "pos.voidSentItem", "pos.roomChargeSearch", "shift.manage", "print.queue", "print.printers", "housekeeping.view",
+      "housekeeping.change", "maintenance.view", "maintenance.report", "maintenance.changeStatus", "spa.use", "roster.mine", "attendance.today",
+      "settings.manage", "settings.admin", "reports", "frontdesk",
+    ];
+    for (const role of ["WAITER", "CASHIER", "MANAGER", "ADMIN"] as Role[]) {
+      for (const capability of capabilities) {
+        expect(can(user(role, ["HR"]), capability), `${role} ${capability}`).toBe(can(user(role), capability));
+      }
+      expect(homeEntriesFor(user(role, ["HR"]))).toEqual(homeEntriesFor(user(role)));
+    }
+  });
+});
+
 describe("job functions are their own axis", () => {
   it("a WAITER who is an ENGINEER can close maintenance tasks; a plain CASHIER can't", () => {
     expect(can(user("WAITER", ["ENGINEER"]), "maintenance.changeStatus")).toBe(true);

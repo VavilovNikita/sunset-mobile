@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePrice, parseWhole, validateInclusiveRange, validateMenuItem, validateNewUser, validatePassword, validateTable } from "../src/lib/settings";
+import { functionConflictMessage, parsePrice, parseWhole, validateInclusiveRange, validateMenuItem, validateNewUser, validatePassword, validateTable } from "../src/lib/settings";
 
 describe("settings forms", () => {
   it("parses prices the API accepts, zero included", () => {
@@ -28,6 +28,14 @@ describe("settings forms", () => {
     expect(validateNewUser("Noi", "noi@x.com", "short")).not.toBeNull();
     expect(validateNewUser("Noi", "noi@x.com", "long-enough")).toBeNull();
     expect(validatePassword("1234567")).not.toBeNull();
+  });
+  it("puts a 409 on a job-function switch beside it (HR is held by one person), and only a 409", () => {
+    expect(functionConflictMessage(409, "The HR function is already assigned to Hana HR - remove it from them first")).toBe(
+      "The HR function is already assigned to Hana HR - remove it from them first",
+    );
+    expect(functionConflictMessage(409, "  ")).toBe("Already assigned to another employee.");
+    expect(functionConflictMessage(400, "bad")).toBeNull();
+    expect(functionConflictMessage(0, "No connection")).toBeNull();
   });
   it("treats ranges as inclusive", () => {
     expect(validateInclusiveRange("2026-10-04", "2026-10-04")).toBeNull();
