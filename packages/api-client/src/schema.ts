@@ -2189,7 +2189,7 @@ export interface paths {
         put?: never;
         /**
          * Close a shift
-         * @description Requires role `CASHIER` or above.
+         * @description Requires role `CASHIER` or above. A `CASHIER` closes only a shift they opened (anyone else's is a 404, as on `GET /shifts/{id}`); `MANAGER` and above may close any. The caller is recorded as `closedByUserId`.
          */
         post: operations["closeShift"];
         delete?: never;
@@ -4196,7 +4196,7 @@ export interface paths {
          *       is `SKIPPED` with a message, and the server logs a warning.
          *
          *
-         *     An import whose SiteMinder timestamp (the latest of `bookedAt`/`modifiedAt`/`cancelledAt`) is older than the last one applied to this booking is `SKIPPED` as stale.
+         *     An import whose SiteMinder timestamp (the latest of `bookedAt`/`modifiedAt`/`cancelledAt`) is older than the last one applied to this booking is `SKIPPED` as stale; one equal to it is `UNCHANGED` and writes nothing, so a re-poll of an unchanged reservation never undoes what staff changed since (an extra night, the party size, a price). Only a newer SiteMinder version is applied over staff edits.
          *
          *     Each step of an update is its own write, like the staff endpoints it reuses: if one step fails (say, the new dates aren't available), the steps before it stay applied and the next poll retries the rest. Every change is audited under the booking's usual actions with the actor `SITEMINDER`.
          */
@@ -14201,7 +14201,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["ForbiddenCashierPlus"];
-            /** @description Shift not found. */
+            /** @description Shift not found, or (for a `CASHIER`) another cashier's shift. */
             404: {
                 headers: {
                     [name: string]: unknown;

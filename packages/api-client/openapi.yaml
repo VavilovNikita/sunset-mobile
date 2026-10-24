@@ -5722,7 +5722,10 @@ paths:
       operationId: closeShift
       tags: [Shifts]
       summary: Close a shift
-      description: Requires role `CASHIER` or above.
+      description: >
+        Requires role `CASHIER` or above. A `CASHIER` closes only a shift they opened (anyone
+        else's is a 404, as on `GET /shifts/{id}`); `MANAGER` and above may close any. The caller
+        is recorded as `closedByUserId`.
       requestBody:
         required: true
         content:
@@ -5741,7 +5744,7 @@ paths:
         "403":
           $ref: "#/components/responses/ForbiddenCashierPlus"
         "404":
-          description: Shift not found.
+          description: Shift not found, or (for a `CASHIER`) another cashier's shift.
           content:
             application/json:
               schema:
@@ -10227,7 +10230,10 @@ paths:
 
 
         An import whose SiteMinder timestamp (the latest of `bookedAt`/`modifiedAt`/`cancelledAt`)
-        is older than the last one applied to this booking is `SKIPPED` as stale.
+        is older than the last one applied to this booking is `SKIPPED` as stale; one equal to it
+        is `UNCHANGED` and writes nothing, so a re-poll of an unchanged reservation never undoes
+        what staff changed since (an extra night, the party size, a price). Only a newer
+        SiteMinder version is applied over staff edits.
 
 
         Each step of an update is its own write, like the staff endpoints it reuses: if one step
