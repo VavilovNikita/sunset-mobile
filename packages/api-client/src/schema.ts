@@ -8394,8 +8394,10 @@ export interface components {
             requestMinHoursBefore: number;
             /** @description Allow a request for today's shift (still subject to `requestMinHoursBefore`). Default off. */
             allowTodayRequests: boolean;
-            /** @description A shift can be moved to a day at most this many days ahead (default 14). */
+            /** @description How many of the nearest days the bot offers as buttons when a shift is moved (default 14). It does not limit the move - `moveMaxDaysAhead` does. */
             moveWindowDays: number;
+            /** @description How far ahead a shift can be moved at all (default 60; never less than `moveWindowDays`, else 400 on this field). Days beyond the buttons are reached with the bot's "Other date..." calendar or by typing a date. */
+            moveMaxDaysAhead: number;
             /** @description The employee must give a reason (up to 300 characters). Default on. */
             reasonRequired: boolean;
             /** @description How many days ahead "My shifts" shows (default 14). */
@@ -8473,6 +8475,7 @@ export interface components {
             requestMinHoursBefore: number;
             allowTodayRequests: boolean;
             moveWindowDays: number;
+            moveMaxDaysAhead: number;
             reasonRequired: boolean;
             myShiftsDays: number;
             fallbackToAdmin: boolean;
@@ -8510,6 +8513,28 @@ export interface components {
             telegramConfigured: boolean;
             /** @description The bot's name from Telegram's `getMe`, without the `@`. Null while unknown (or when not configured). */
             botUsername?: string | null;
+            /**
+             * Format: date-time
+             * @description When Telegram last answered the server's poll (`getUpdates`). Absent until the first answer since the server
+             *     started (in memory only, so it also starts empty after a restart) and when Telegram is not configured.
+             */
+            lastSuccessAt?: string | null;
+            /**
+             * Format: date-time
+             * @description When the current series of failed polls began. Absent while Telegram answers.
+             */
+            failingSince?: string | null;
+            /** @description Polls in a row that failed. 0 while Telegram answers; above 0 means a series is running and the server is backing off (3 s, doubling, up to 60 s). */
+            consecutiveFailures: number;
+            /**
+             * @description How requests to Telegram go out right now. `PROXY` = through the hotel's HTTP proxy (`TELEGRAM_PROXY`), `DIRECT` =
+             *     straight from the server. With a proxy configured, `DIRECT` means the server fell back after repeated failed polls
+             *     and is probing the proxy again every few minutes; without one it is always `DIRECT`.
+             * @enum {string}
+             */
+            telegramRoute: "DIRECT" | "PROXY";
+            /** @description Whether `TELEGRAM_PROXY` is set. The proxy's address is never returned. */
+            telegramProxyConfigured: boolean;
         };
         NotificationSettings: {
             lateEnabled: boolean;

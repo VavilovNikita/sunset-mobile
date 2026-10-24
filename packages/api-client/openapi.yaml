@@ -20570,6 +20570,7 @@ components:
         - requestMinHoursBefore
         - allowTodayRequests
         - moveWindowDays
+        - moveMaxDaysAhead
         - reasonRequired
         - myShiftsDays
         - fallbackToAdmin
@@ -20637,7 +20638,16 @@ components:
           type: integer
           minimum: 1
           maximum: 90
-          description: A shift can be moved to a day at most this many days ahead (default 14).
+          description: >
+            How many of the nearest days the bot offers as buttons when a shift is moved (default 14). It does not
+            limit the move - `moveMaxDaysAhead` does.
+        moveMaxDaysAhead:
+          type: integer
+          minimum: 1
+          maximum: 180
+          description: >
+            How far ahead a shift can be moved at all (default 60; never less than `moveWindowDays`, else 400 on this
+            field). Days beyond the buttons are reached with the bot's "Other date..." calendar or by typing a date.
         reasonRequired:
           type: boolean
           description: The employee must give a reason (up to 300 characters). Default on.
@@ -20767,6 +20777,7 @@ components:
         - requestMinHoursBefore
         - allowTodayRequests
         - moveWindowDays
+        - moveMaxDaysAhead
         - reasonRequired
         - myShiftsDays
         - fallbackToAdmin
@@ -20825,6 +20836,10 @@ components:
           type: integer
           minimum: 1
           maximum: 90
+        moveMaxDaysAhead:
+          type: integer
+          minimum: 1
+          maximum: 180
         reasonRequired:
           type: boolean
         myShiftsDays:
@@ -20902,7 +20917,7 @@ components:
 
     NotificationStatus:
       type: object
-      required: [telegramConfigured]
+      required: [telegramConfigured, consecutiveFailures, telegramRoute, telegramProxyConfigured]
       properties:
         telegramConfigured:
           type: boolean
@@ -20911,6 +20926,32 @@ components:
           type: string
           nullable: true
           description: The bot's name from Telegram's `getMe`, without the `@`. Null while unknown (or when not configured).
+        lastSuccessAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            When Telegram last answered the server's poll (`getUpdates`). Absent until the first answer since the server
+            started (in memory only, so it also starts empty after a restart) and when Telegram is not configured.
+        failingSince:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the current series of failed polls began. Absent while Telegram answers.
+        consecutiveFailures:
+          type: integer
+          minimum: 0
+          description: Polls in a row that failed. 0 while Telegram answers; above 0 means a series is running and the server is backing off (3 s, doubling, up to 60 s).
+        telegramRoute:
+          type: string
+          enum: [DIRECT, PROXY]
+          description: |
+            How requests to Telegram go out right now. `PROXY` = through the hotel's HTTP proxy (`TELEGRAM_PROXY`), `DIRECT` =
+            straight from the server. With a proxy configured, `DIRECT` means the server fell back after repeated failed polls
+            and is probing the proxy again every few minutes; without one it is always `DIRECT`.
+        telegramProxyConfigured:
+          type: boolean
+          description: Whether `TELEGRAM_PROXY` is set. The proxy's address is never returned.
 
     NotificationSettings:
       type: object
