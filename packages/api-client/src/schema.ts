@@ -2189,7 +2189,7 @@ export interface paths {
         put?: never;
         /**
          * Close a shift
-         * @description Requires role `CASHIER` or above.
+         * @description Requires role `CASHIER` or above. A `CASHIER` closes only a shift they opened (anyone else's is a 404, as on `GET /shifts/{id}`); `MANAGER` and above may close any. The caller is recorded as `closedByUserId`.
          */
         post: operations["closeShift"];
         delete?: never;
@@ -4196,7 +4196,7 @@ export interface paths {
          *       is `SKIPPED` with a message, and the server logs a warning.
          *
          *
-         *     An import whose SiteMinder timestamp (the latest of `bookedAt`/`modifiedAt`/`cancelledAt`) is older than the last one applied to this booking is `SKIPPED` as stale.
+         *     An import whose SiteMinder timestamp (the latest of `bookedAt`/`modifiedAt`/`cancelledAt`) is older than the last one applied to this booking is `SKIPPED` as stale; one equal to it is `UNCHANGED` and writes nothing, so a re-poll of an unchanged reservation never undoes what staff changed since (an extra night, the party size, a price). Only a newer SiteMinder version is applied over staff edits.
          *
          *     Each step of an update is its own write, like the staff endpoints it reuses: if one step fails (say, the new dates aren't available), the steps before it stay applied and the next poll retries the rest. Every change is audited under the booking's usual actions with the actor `SITEMINDER`.
          */
@@ -8394,8 +8394,10 @@ export interface components {
             requestMinHoursBefore: number;
             /** @description Allow a request for today's shift (still subject to `requestMinHoursBefore`). Default off. */
             allowTodayRequests: boolean;
-            /** @description A shift can be moved to a day at most this many days ahead (default 14). */
+            /** @description How many of the nearest days the bot offers as buttons when a shift is moved (default 14). It does not limit the move - `moveMaxDaysAhead` does. */
             moveWindowDays: number;
+            /** @description How far ahead a shift can be moved at all (default 60; never less than `moveWindowDays`, else 400 on this field). Days beyond the buttons are reached with the bot's "Other date..." calendar or by typing a date. */
+            moveMaxDaysAhead: number;
             /** @description The employee must give a reason (up to 300 characters). Default on. */
             reasonRequired: boolean;
             /** @description How many days ahead "My shifts" shows (default 14). */
@@ -8473,6 +8475,7 @@ export interface components {
             requestMinHoursBefore: number;
             allowTodayRequests: boolean;
             moveWindowDays: number;
+            moveMaxDaysAhead: number;
             reasonRequired: boolean;
             myShiftsDays: number;
             fallbackToAdmin: boolean;
@@ -8510,6 +8513,28 @@ export interface components {
             telegramConfigured: boolean;
             /** @description The bot's name from Telegram's `getMe`, without the `@`. Null while unknown (or when not configured). */
             botUsername?: string | null;
+            /**
+             * Format: date-time
+             * @description When Telegram last answered the server's poll (`getUpdates`). Absent until the first answer since the server
+             *     started (in memory only, so it also starts empty after a restart) and when Telegram is not configured.
+             */
+            lastSuccessAt?: string | null;
+            /**
+             * Format: date-time
+             * @description When the current series of failed polls began. Absent while Telegram answers.
+             */
+            failingSince?: string | null;
+            /** @description Polls in a row that failed. 0 while Telegram answers; above 0 means a series is running and the server is backing off (3 s, doubling, up to 60 s). */
+            consecutiveFailures: number;
+            /**
+             * @description How requests to Telegram go out right now. `PROXY` = through the hotel's HTTP proxy (`TELEGRAM_PROXY`), `DIRECT` =
+             *     straight from the server. With a proxy configured, `DIRECT` means the server fell back after repeated failed polls
+             *     and is probing the proxy again every few minutes; without one it is always `DIRECT`.
+             * @enum {string}
+             */
+            telegramRoute: "DIRECT" | "PROXY";
+            /** @description Whether `TELEGRAM_PROXY` is set. The proxy's address is never returned. */
+            telegramProxyConfigured: boolean;
         };
         NotificationSettings: {
             lateEnabled: boolean;
@@ -14176,7 +14201,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["ForbiddenCashierPlus"];
-            /** @description Shift not found. */
+            /** @description Shift not found, or (for a `CASHIER`) another cashier's shift. */
             404: {
                 headers: {
                     [name: string]: unknown;
