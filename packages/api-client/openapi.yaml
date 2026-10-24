@@ -2353,6 +2353,9 @@ paths:
         is `CHECKED_IN` or `CHECKED_OUT` is a 409 (check the guest out, or shorten the stay, instead).
         Re-sending `CANCELLED` to a booking that is already cancelled is not a change and stays allowed.
 
+        A cancelled booking stays cancelled: any other status sent to it is a 409. Its room went back
+        on sale at the cancellation and may have been sold since, so the way back is a new booking.
+
         Cancelling also cleans up the guest's spa: every `BOOKED` spa appointment of the booking is
         cancelled, and the still-unpaid spa lines on the orders linked to them are taken off (an
         order left with no lines is cancelled). Anything already paid is left exactly as it is, and
@@ -2391,7 +2394,7 @@ paths:
             A change into `PAID` while money is still owed and the request carries no payment (or
             one for a different amount) - `BookingStatusInput.payment`. `PAID` never writes money
             off on its own. Also: a change into `CANCELLED` for a booking that is `CHECKED_IN` or
-            `CHECKED_OUT`.
+            `CHECKED_OUT`, and any change out of `CANCELLED` (a cancelled booking is never reinstated).
           content:
             application/json:
               schema:
@@ -14480,8 +14483,7 @@ components:
           nullable: true
           description: >
             The reason staff gave when this booking was cancelled (`BookingStatusInput.cancellationReason`).
-            Set only while `status` is `CANCELLED`, and only for the current cancellation: cleared if
-            the booking is moved out of `CANCELLED`. Null for a cancellation without a reason (the
+            Set only while `status` is `CANCELLED` (a cancelled booking is never moved out of it). Null for a cancellation without a reason (the
             SiteMinder import, the unconfirmed-booking expiry sweep) and for cancellations made before
             this field existed - their reason, if any, is only in the audit log.
         segments:
@@ -16684,10 +16686,10 @@ components:
           type: string
           description: >
             The payment a change into `PAID` must carry (`BookingStatusInput.payment`): the balance
-            as if the booking were not yet paid and not cancelled - the room (also for a `CANCELLED`
-            booking being reinstated) plus POS room charges, minus what folio payments already
-            cover. Equals `balanceDue` for a `NEW`/`CONFIRMED` booking; for a booking that is
-            already `PAID` or `CANCELLED` it is what `balanceDue` would be if it were not. Decimal(10,2)
+            as if the booking were not yet paid - the room plus POS room charges, minus what folio
+            payments already cover. Equals `balanceDue` for a `NEW`/`CONFIRMED` booking; for a booking
+            that is already `PAID` it is what `balanceDue` would be if it were not. A `CANCELLED`
+            booking can't be marked `PAID` at all (it is never reinstated). Decimal(10,2)
             rendered as a string.
         creditBalance:
           type: string
