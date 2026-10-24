@@ -40,7 +40,7 @@ export function Body({ children, muted, style }: { children: ReactNode; muted?: 
 export function ErrorText({ children }: { children: ReactNode }) {
   if (!children) return null;
   return (
-    <Text accessibilityRole="alert" style={styles.error}>
+    <Text role="alert" style={styles.error}>
       {children}
     </Text>
   );
@@ -149,8 +149,9 @@ export function Choice<T extends string>({
         {options.map((o) => (
           <Pressable
             key={o.value}
-            accessibilityRole="radio"
-            accessibilityState={{ selected: o.value === value, disabled: !!o.disabled }}
+            role="radio"
+            aria-checked={o.value === value}
+            aria-disabled={!!o.disabled}
             disabled={o.disabled}
             onPress={() => onChange(o.value)}
             style={[styles.chip, o.value === value && { backgroundColor: colors.sea, borderColor: colors.sea }, o.disabled && { opacity: 0.4 }]}
