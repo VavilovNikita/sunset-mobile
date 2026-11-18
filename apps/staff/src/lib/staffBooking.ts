@@ -41,6 +41,9 @@ export const CHANNEL_OPTIONS: { value: Schemas["BookingChannel"]; label: string 
   { value: "BOOKING_COM", label: "Booking.com" },
   { value: "AGODA", label: "Agoda" },
   { value: "EXPEDIA", label: "Expedia" },
+  { value: "CTRIP", label: "Ctrip / Trip.com" },
+  { value: "HOTELBEDS", label: "Hotelbeds" },
+  { value: "AGENT", label: "Travel agent" },
   { value: "AIRBNB", label: "Airbnb" },
   { value: "OTHER", label: "Other" },
 ];

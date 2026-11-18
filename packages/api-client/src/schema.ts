@@ -2499,6 +2499,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reports/booking-tracker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The booking tracker - results, channels, booking trends and the weekly review, for a range of stay months
+         * @description Requires role `MANAGER` or above, same floor as the rest of `/reports/*`. This is the hotel's hand-filled "SBR Booking Tracker" workbook computed from real data; `GET /reports/booking-tracker/export` is the same figures as an Excel file. **All the arithmetic is the server's** - a client displays what it gets.
+         *
+         *     **Period.** `fromMonth`/`toMonth` are inclusive stay months (`YYYY-MM`), at most 12 months. Both omitted: the current season, November to April - the one that contains today, or the coming one while today is May to October. Giving one of the two without the other is a 400. `stayMonth` narrows the channel and trends sections to one month of the range (omitted = all stays in the range). "Today" (`positionDate`) and every month and week boundary are hotel (Asia/Bangkok) days.
+         *
+         *     **A counted booking** is `CONFIRMED` or `PAID` (the workbook's "Confirmed"). `NEW` (the workbook's "Enquiry"), `CANCELLED` and a no-show are not counted. This is narrower than `GET /reports/occupancy`, which counts every non-cancelled booking: for the same nights the tracker's `bookedRoomNights` equals occupancy's `roomNightsSold` minus the nights of `NEW` and no-show bookings. The nights themselves are the same population as every other room report (`ReportService`): segment nights, plus the nights of a guest staying past `checkOut` (`OverstayCharge`). Complimentary and house-use stays are counted by their channel like any other booking - the workbook has no such split.
+         *
+         *     **Stay month and money.** A stay that crosses months is split by its nights, each night at its frozen nightly price (`BookingSegmentNightlyRate`; an overstay night at the price charged to the booking). **Gross** (`grossRevenue`) is that agreed price with VAT and the service charge inside it. Per booking and month, each step rounded to two decimals: package before VAT and service charge = gross / (1 + service charge) / (1 + VAT); service charge = package x service charge rate; VAT = gross - package - service charge; breakfast = nights in the month x `breakfastGuests` x `breakfastRate` (nothing where either is empty); net room revenue = package - breakfast. Months and channels sum those rounded figures. The rates are `GET /settings/vat` and `GET /settings/service-charge`; the service charge is deducted **for this analysis only** - nothing is charged to a guest. `Booking.earlyDepartureFee` has no night and is left out, exactly as in the revenue statistic (Z410).
+         *
+         *     **Per month.** `physicalRooms` - units active today (as the manager report: today's inventory, not a historical count); `blockedRoomNights` - nights a unit is out of service by a `RoomUnitBlock` (a unit under overlapping blocks counts once per night); `availableRoomNights` = `physicalRooms` x nights in the month - `blockedRoomNights`; occupancy = booked / available. Baseline and target are entered by a manager (`PUT /reports/booking-tracker/months/{month}`); `stillNeededRoomNights` = max(0, target - booked) and `pickupVsBaseline` = booked - baseline room nights, each null while its input is not entered. The `total` row sums the months; its inputs sum the months that have them.
+         *
+         *     **Booking date and window.** The day the booking was made, a hotel day: SiteMinder's own "booked on" time (`Booking.bookedAt`) for a SiteMinder booking that has it, else the booking's `createdAt`. The window is the booking's `checkIn` minus that day, in days (never below 0). Buckets are 0-3, 4-7, 8-14, 15-30, 31-60, 61-90 and 91+ days; the average is weighted by room nights; both count only the nights inside the filter. `weeks` is booking pace: the last 12 weeks (Monday start, the last one holds `positionDate`), room nights and net revenue of bookings *made* that week, again only for the nights inside the filter.
+         *
+         *     **Weekly review** lists the frozen Friday snapshots (see `BookingTrackerSnapshot`) of the months in the range, newest first.
+         */
+        get: operations["getBookingTrackerReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/booking-tracker/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The booking tracker as an Excel workbook
+         * @description Requires role `MANAGER` or above. Same parameters, rules and figures as `GET /reports/booking-tracker` (one computation, no second copy of the arithmetic), laid out like the hotel's own workbook: sheets Results, Channel summary, Booking trends, Weekly review and Bookings (one row per counted booking with nights in the range, and its split by stay month). Values, not formulas; money as THB numbers with two decimals, shares as percent, dates as dates; the five charts (revenue and room nights by channel, booking windows, weekly room nights and weekly revenue) are native Excel charts. Text typed by people goes through the spreadsheet-safe filter like every export. The file is named `booking-tracker_<fromMonth>_<toMonth>_<today>.xlsx`.
+         */
+        get: operations["exportBookingTracker"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/booking-tracker/months/{month}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a stay month's target and baseline
+         * @description Requires role `MANAGER` or above. Replaces the three entered inputs of one stay month: a field that is omitted or `null` is cleared. A save that changes nothing writes nothing, not even an audit entry; a real change is audited (`BOOKING_TRACKER_TARGET_UPDATED`) with the old and new values. A month whose three inputs are all empty has no stored row.
+         */
+        put: operations["updateBookingTrackerMonth"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/booking-tracker/snapshots/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit the notes of a weekly snapshot
+         * @description Requires role `MANAGER` or above. Only the four editable fields can change - the frozen figures never do, and there is no way to take or delete a snapshot by hand. A field that is omitted is left alone, `null` or blank clears it. A save that changes nothing writes nothing; a real change is audited (`BOOKING_TRACKER_SNAPSHOT_UPDATED`) naming the fields, never their text.
+         */
+        patch: operations["updateBookingTrackerSnapshot"];
+        trace?: never;
+    };
     "/reports/manager": {
         parameters: {
             query?: never;
@@ -2921,6 +3013,30 @@ export interface paths {
          * @description Requires `ADMIN`. The only way to see the real thing - paper width, density and the logo bitmap depend on the printer. Prints the same sample as the preview using the *saved* layout, on the printer of the department that document goes to (kitchen ticket: KITCHEN, bar ticket: BAR, everything else: CASHIER), through the normal print queue so it appears under print jobs and retries like any other. `attempted` is false when that department has no active printer.
          */
         post: operations["testPrintLayout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/service-charge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the service-charge rate used by the booking tracker
+         * @description Requires role `ADMIN`, same as every `/settings/*` route. The rate is a deduction for the booking tracker's analysis only - see `ServiceChargeSettings`.
+         */
+        get: operations["getServiceChargeSettings"];
+        /**
+         * Change the service-charge rate used by the booking tracker
+         * @description Requires role `ADMIN`. Takes effect on the next tracker request (nothing is cached or versioned: every tracker figure is computed with the rate stored when it is requested; the frozen weekly snapshots keep what they were computed with). Audited (`SERVICE_CHARGE_SETTINGS_UPDATED`) with the old and new rate; an unchanged value records nothing. Nothing is charged to anyone.
+         */
+        put: operations["updateServiceChargeSettings"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5203,6 +5319,11 @@ export interface components {
             updatedAt: string;
             /**
              * Format: date-time
+             * @description When the printer was last tried (automatic or manual). Absent while no attempt has been made.
+             */
+            lastAttemptAt?: string;
+            /**
+             * Format: date-time
              * @description Set once this job is closed as not-actionable (`POST /print-jobs/dismiss`) - null for every job by default. `GET /print-jobs` excludes dismissed jobs unless `includeDismissed=true` is passed.
              */
             dismissedAt?: string | null;
@@ -5239,14 +5360,25 @@ export interface components {
         BookingStatus: "NEW" | "CONFIRMED" | "PAID" | "CANCELLED";
         /**
          * @description How a booking reached the hotel - a label staff record from what they already know (the guest booked by phone, walked in, said they found the hotel on Airbnb). Not an OTA integration: nothing is synced with any channel. `POST /bookings` (the public form) is always `DIRECT`, set server-side. Unrelated to the internal public-form-vs-front-desk distinction that drives auto-expiry of unconfirmed public inquiries, which is never exposed and never changes when this does. Bookings made before this field existed read `DIRECT` if they came through the public form and `OTHER` if staff entered them (their real channel was never recorded). Independent of `BookingPurpose`: a complimentary stay still has the channel it arrived by.
+         *     `CTRIP` (Ctrip / Trip.com), `HOTELBEDS` and `AGENT` (a travel agent booking directly) are kept apart for the booking tracker. The SiteMinder import maps names starting with Ctrip/Trip.com and Hotelbeds to the first two; `AGENT` is staff-entered only.
          * @enum {string}
          */
-        BookingChannel: "DIRECT" | "PHONE" | "WALK_IN" | "BOOKING_COM" | "AIRBNB" | "AGODA" | "EXPEDIA" | "OTHER";
+        BookingChannel: "DIRECT" | "PHONE" | "WALK_IN" | "BOOKING_COM" | "AIRBNB" | "AGODA" | "EXPEDIA" | "CTRIP" | "HOTELBEDS" | "AGENT" | "OTHER";
         /**
          * @description Why the room is occupied: an ordinary paying stay (`STANDARD`), a complimentary stay (`COMPLIMENTARY`), or internal house use (`HOUSE_USE`). A separate question from `BookingChannel` (how the booking reached the hotel) - a comp booked by phone is `COMPLIMENTARY` + `PHONE`. Either way it is still a booking that occupies a room and counts as room-nights sold; a room taken out of sale is a `RoomUnitBlock` instead. Nothing forces `totalPrice` to zero for a comp or house-use stay - it is priced like any other booking. `POST /bookings` (the public form) is always `STANDARD`. Bookings made before this field existed read `STANDARD`.
          * @enum {string}
          */
         BookingPurpose: "STANDARD" | "COMPLIMENTARY" | "HOUSE_USE";
+        /**
+         * @description Where the booking's money stands, computed from the folio's own `balanceDue`/`creditBalance` (`FolioBreakdown#settlement` - the one function), never stored: `OWES` (`balanceDue` > 0), `CREDIT` (collected more than was charged, `creditBalance` > 0) or `SETTLED` (neither). It exists because `BookingStatus.PAID` only says the room was paid - a `PAID` booking whose guest stayed on, or ran up POS room charges, can still owe money. Read this, not `status`, for "is anything left to settle".
+         * @enum {string}
+         */
+        SettlementStatus: "SETTLED" | "OWES" | "CREDIT";
+        /**
+         * @description Where a booking stands as a stay, derived by the server from `status` and `occupancyStatus` (never stored): `CANCELLED` (booking cancelled, whatever else), `NO_SHOW`, `CHECKED_OUT`, `IN_HOUSE` (checked in, including an overdue guest) and `UPCOMING` (nobody has arrived yet - a `NEW`/`CONFIRMED`/`PAID` booking that has not started, or whose dates have passed without a check-in and that is not yet marked no-show or cancelled). Show this, not `status`, where the question is "what happened to this stay" (the guest card's stay history).
+         * @enum {string}
+         */
+        StayStatus: "UPCOMING" | "IN_HOUSE" | "CHECKED_OUT" | "CANCELLED" | "NO_SHOW";
         /**
          * @description Whether the guest is physically at the hotel - deliberately separate from `BookingStatus`, which stays commercial only (confirmed/paid/cancelled). One value per booking, not per segment: a guest checks in once and checks out once regardless of how many times they're relocated to a different room mid-stay. Never affects availability - the engine behind `GET /availability/{roomId}` and the booking calendar reads `BookingSegment`/`Booking.status` only, never this field. `NO_SHOW` is a label, not an action: it changes nothing about the booking's dates or `status`, and does not release any nights - the deliberate way to actually free them is cancelling or shortening the booking, a separate step.
          * @enum {string}
@@ -5303,6 +5435,10 @@ export interface components {
             booking: components["schemas"]["Booking"];
             /** @description Decimal(10,2) rendered as a string. Same meaning as `CheckOutResult.outstandingBalance`. */
             outstandingBalance: string;
+            /** @description The nights charged to this booking as overstay (`BookingFolio.overstayNights`) - the one number to show next to the guest; `overdueDays` is the age of the missed departure and is not the same count. */
+            overstayNights?: number;
+            /** @description True when tonight's night is one of `overstayNights` (the guest is still in the house and tonight has accrued). */
+            overstayIncludesTonight?: boolean;
             /** @description How many days past `checkOut` a still-`CHECKED_IN` guest is (`0` when not overdue). The one rule for this lives in `OverstayRule` - an overdue guest is still in the house and still occupies their room tonight, on every screen. Same figure the night audit's missed departures show. */
             overdueDays?: number;
         };
@@ -5743,7 +5879,7 @@ export interface components {
             roomUnitId?: string | null;
         };
         /**
-         * @description Sort column for `GET /bookings/search`. `ROOM` sorts by the room type's name. Defaults to `CHECK_IN`.
+         * @description Sort column for `GET /bookings/search`. `ROOM` sorts by the room type's name. Defaults to `CHECK_IN`. With neither `sort` nor `direction` given the order is not plain check-in descending - guests in the room now come first (checked in and not yet gone, an overstaying guest included, soonest departure on top), then arrivals still to come by date ascending, then earlier stays, latest first.
          * @enum {string}
          */
         BookingSortField: "GUEST_NAME" | "ROOM" | "CHECK_IN" | "CHECK_OUT" | "TOTAL_PRICE" | "STATUS" | "CREATED_AT";
@@ -5902,10 +6038,23 @@ export interface components {
             children: number;
             paymentNote: string | null;
             occupancyStatus: components["schemas"]["OccupancyStatus"];
+            stayStatus?: components["schemas"]["StayStatus"];
+            settlement?: components["schemas"]["SettlementStatus"];
+            /** @description Decimal(10,2) string, `BookingFolio.creditBalance` - what was collected beyond what was charged (`settlement` `CREDIT`); "0.00" otherwise. */
+            creditBalance?: string;
             /** Format: date-time */
             checkedInAt: string | null;
             /** Format: date-time */
             checkedOutAt: string | null;
+            /** @description Breakfast guests per night, when staff recorded it; null otherwise (no breakfast is deducted in the booking tracker). */
+            breakfastGuests?: number | null;
+            /** @description Baht per guest per night; null when no breakfast is recorded. */
+            breakfastRate?: components["schemas"]["BreakfastRate"] | null;
+            /**
+             * Format: date-time
+             * @description SiteMinder's "booked on" time for an imported booking that has it; null otherwise (the booking tracker then uses `createdAt`).
+             */
+            bookedAt?: string | null;
             /** @description SiteMinder's booking reference for a booking imported from SiteMinder; null for every other booking. */
             externalReference: string | null;
             /** @description For a SiteMinder import, the channel name exactly as SiteMinder showed it - what `channel` was mapped from, and the only record of which OTA an `OTHER` booking came through. Null for every other booking. */
@@ -5950,6 +6099,10 @@ export interface components {
             adults?: number;
             /** @description Optional. Omitted leaves the child count as it is; present sets it. Not nullable. */
             children?: number;
+            /** @description Optional. Breakfast guests per night (the booking tracker deducts breakfast from the package). Omitted leaves it as it is, `null` clears it. More than 0 needs a `breakfastRate` (400), and no more than adults + children. CASHIER+, like the rest of this form; changes are audited. */
+            breakfastGuests?: number | null;
+            /** @description Optional. Omitted leaves it as it is, `null` clears it. */
+            breakfastRate?: components["schemas"]["BreakfastRate"] | null;
             /** @description Why the booking is being cancelled. Read only when this request moves the booking into `CANCELLED` (ignored otherwise); stored as `Booking.cancellationReason` and repeated in that status change's audit entry. Optional at the API so system paths (the SiteMinder import, the expiry sweep) keep working; the admin screens require it before they send a cancel. */
             cancellationReason?: string | null;
             /** @description The payment that settles the booking, recorded in the same transaction as the status change. Read only on a change into `PAID`. A booking cannot become `PAID` while `BookingFolio.balanceDue` (computed as if the booking were not yet paid) is above zero unless this carries a payment of exactly that amount - otherwise 409. When nothing is owed it is optional and, if sent, recorded like any folio payment (and rejected the same way if it would overpay). */
@@ -6122,7 +6275,7 @@ export interface components {
             logoPngBase64?: string;
             logoWidthDots?: number;
         };
-        /** @description The one VAT rate applied to all revenue, room and POS alike, by `GET /reports/revenue-statistic`. Stored, not hardcoded, so it can change without a deploy; seeded at 7.00 (Thailand's standard rate) as an editable default. All prices in this system are VAT-inclusive - see that report for why - so the rate is used to extract VAT from a figure, never to add it on top. Nothing else in the system reads it: no price, order total or receipt changes when it does. */
+        /** @description The one VAT rate applied to all revenue, room and POS alike, by `GET /reports/revenue-statistic`. Stored, not hardcoded, so it can change without a deploy; seeded at 7.00 (Thailand's standard rate) as an editable default. All prices in this system are VAT-inclusive - see that report for why - so the rate is used to extract VAT from a figure, never to add it on top. Nothing else in the system reads it: no price, order total or receipt changes when it does. The one exception is the booking tracker (`GET /reports/booking-tracker`), which reads it next to `ServiceChargeSettings` to take VAT out of room prices for its analysis. */
         VatSettings: {
             /** @description Percent, two decimals, e.g. "7.00". */
             vatRate: string;
@@ -6133,6 +6286,159 @@ export interface components {
         VatSettingsUpdateInput: {
             /** @description Percent, at most two decimals. 0 is allowed (VAT not charged). */
             vatRate: number;
+        };
+        /** @description The service-charge rate the booking tracker (`GET /reports/booking-tracker`) deducts from room prices, which include it. **For that analysis only**: nothing is ever charged to a guest, and no folio, POS total, receipt, ledger entry or Z-report reads it - the system still has no service charge as a thing it charges. Seeded at 10.00. */
+        ServiceChargeSettings: {
+            /** @description Percent, two decimals, e.g. "10.00". */
+            serviceChargeRate: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description Body of `PUT /settings/service-charge`. */
+        ServiceChargeSettingsUpdateInput: {
+            /** @description Percent, at most two decimals. 0 is allowed (no service charge inside the prices). */
+            serviceChargeRate: number;
+        };
+        /**
+         * @description Baht per guest per night for breakfast - the two rates the hotel sells. The only place the allowed set is written down (the column's `CHECK` mirrors it).
+         * @enum {integer}
+         */
+        BreakfastRate: 250 | 350;
+        /** @description One stay month of the booking tracker (and, with `month` null, the total row). See `GET /reports/booking-tracker` for every definition. Money is a decimal string, percentages are percent with two decimals, a figure that cannot be computed is `null`. */
+        BookingTrackerMonth: {
+            /** @description `YYYY-MM`; null on the total row. */
+            month: string | null;
+            /** @description Units active today; null on the total row. */
+            physicalRooms: number | null;
+            nightsInMonth: number;
+            blockedRoomNights: number;
+            availableRoomNights: number;
+            bookedRoomNights: number;
+            /** @description Booked / available room nights; null when nothing is available. */
+            occupancyPercent: string | null;
+            /** @description The inclusive package - the agreed price with VAT and service charge inside. */
+            grossRevenue: string;
+            /** @description Gross / (1 + service charge) / (1 + VAT), before breakfast. */
+            packageRevenue: string;
+            serviceCharge: string;
+            vat: string;
+            breakfastRevenue: string;
+            /** @description Package less breakfast. */
+            netRoomRevenue: string;
+            /** @description Net room revenue / booked room nights; null without room nights. */
+            netAdr: string | null;
+            baselineRoomNights: number | null;
+            baselineNetRevenue: string | null;
+            targetRoomNights: number | null;
+            /** @description max(0, target - booked); null without a target. */
+            stillNeededRoomNights: number | null;
+            /** @description Booked - baseline room nights; null without a baseline. */
+            pickupVsBaseline: number | null;
+        };
+        BookingTrackerChannelRow: {
+            /** @description Null on the total row. */
+            channel: components["schemas"]["BookingChannel"] | null;
+            roomNights: number;
+            netRoomRevenue: string;
+            netAdr: string | null;
+            roomNightSharePercent: string | null;
+            revenueSharePercent: string | null;
+        };
+        BookingTrackerChannelRank: {
+            rank: number;
+            channel: components["schemas"]["BookingChannel"];
+            netRoomRevenue: string;
+            roomNights: number;
+        };
+        /** @description Every channel in the enum's order (zeros included), the total, and the channels with room nights ranked by net room revenue (ties: more room nights, then enum order). */
+        BookingTrackerChannels: {
+            rows: components["schemas"]["BookingTrackerChannelRow"][];
+            total: components["schemas"]["BookingTrackerChannelRow"];
+            ranking: components["schemas"]["BookingTrackerChannelRank"][];
+        };
+        BookingTrackerBucket: {
+            /** @description e.g. `0-3`, `91+`. */
+            label: string;
+            fromDays: number;
+            /** @description Null for the open-ended last bucket. */
+            toDays: number | null;
+            roomNights: number;
+            netRoomRevenue: string;
+            roomNightSharePercent: string | null;
+        };
+        BookingTrackerWeek: {
+            /**
+             * Format: date
+             * @description The Monday of the week.
+             */
+            weekStart: string;
+            roomNights: number;
+            netRoomRevenue: string;
+        };
+        BookingTrackerTrends: {
+            /** @description Two decimals, weighted by room nights; null without room nights. */
+            averageBookingWindowDays: string | null;
+            buckets: components["schemas"]["BookingTrackerBucket"][];
+            /** @description The last 12 weeks, oldest first. */
+            weeks: components["schemas"]["BookingTrackerWeek"][];
+        };
+        /** @description One Friday's frozen reading of one stay month: written at 23:55 Bangkok by a scheduled job for every month of the current and the next season (Nov-Apr), never recomputed and never taken by hand. A Friday the server missed is written when it is back, as at that moment, and `late` is true. `pickup*` is the change against the previous snapshot of the same month, null for the first. Only `reason`, `nextAction`, `owner` and `dueDate` are editable. */
+        BookingTrackerSnapshot: {
+            id: string;
+            /** Format: date */
+            snapshotDate: string;
+            stayMonth: string;
+            late: boolean;
+            roomNights: number;
+            netRoomRevenue: string;
+            occupancyPercent: string | null;
+            pickupRoomNights: number | null;
+            pickupNetRevenue: string | null;
+            /** @description Reason / issue. */
+            reason: string | null;
+            nextAction: string | null;
+            owner: string | null;
+            /** Format: date */
+            dueDate: string | null;
+        };
+        BookingTrackerReport: {
+            fromMonth: string;
+            toMonth: string;
+            /** @description The filter that was applied to `channels` and `trends`; null for all stays. */
+            stayMonth: string | null;
+            /**
+             * Format: date
+             * @description Today, hotel day.
+             */
+            positionDate: string;
+            vatRate: string;
+            serviceChargeRate: string;
+            months: components["schemas"]["BookingTrackerMonth"][];
+            total: components["schemas"]["BookingTrackerMonth"];
+            channels: components["schemas"]["BookingTrackerChannels"];
+            trends: components["schemas"]["BookingTrackerTrends"];
+            weeklyReview: components["schemas"]["BookingTrackerSnapshot"][];
+        };
+        BookingTrackerMonthTargets: {
+            month: string;
+            targetRoomNights: number | null;
+            baselineRoomNights: number | null;
+            baselineNetRevenue: string | null;
+        };
+        /** @description Body of `PUT /reports/booking-tracker/months/{month}`. Every field is optional and nullable - an omitted or `null` field is cleared - so none is in `required` (a nullable required property generates a `@NotNull` that rejects the null this endpoint accepts). */
+        BookingTrackerMonthTargetsInput: {
+            targetRoomNights?: number | null;
+            baselineRoomNights?: number | null;
+            /** @description Baht, a decimal string with at most two decimals. */
+            baselineNetRevenue?: string | null;
+        };
+        /** @description Body of `PATCH /reports/booking-tracker/snapshots/{id}`. Omitted leaves a field alone; `null` (or blank text) clears it. */
+        BookingTrackerSnapshotUpdateInput: {
+            reason?: string | null;
+            nextAction?: string | null;
+            owner?: string | null;
+            /** Format: date */
+            dueDate?: string | null;
         };
         /** @description Staff-facing summary of the `GuestAccount` linked to a `Guest` card - presence and verification only. Deliberately no id, email, password hash, token version, or verification token: staff can see that a guest has an account, never anything that would help act as it. */
         GuestAccountLinkSummary: {
@@ -6708,6 +7014,12 @@ export interface components {
             expectedCash: string;
             /** @description Decimal(10,2) rendered as a string, or null if closingCashCounted is null. */
             discrepancy: string | null;
+            /** @description The opener's name (their email when the account has no name). */
+            openedByName?: string;
+            /** @description The closer's name (their email when the account has no name). Absent while the shift is open. */
+            closedByName?: string;
+            /** @description True for a closed shift whose drawer was never counted (`closingCashCounted` is null) - there is nothing to reconcile, which is different from a counted drawer that matched (`discrepancy` of 0.00). False for an open shift and for any counted one. */
+            cashNotCounted?: boolean;
         };
         /** @description Compact line-item summary - menu item name (not id) and quantity, nothing else. */
         BookingPosOrderItem: {
@@ -6729,7 +7041,7 @@ export interface components {
         /**
          * @description What a booking has been charged, what has been collected, and what is still owed - computed on the fly by `BookingService` (`computeFolioBreakdown`), never stored. The one place "how much does this guest owe" is answered; `outstandingBalance` everywhere else is `balanceDue` here.
          *
-         *     Charged: `roomTotal` (the nights stayed) + `earlyDepartureFee` + `roomChargesGross` (POS orders charged to the room) = `folioTotal`. Collected: `paidTotal` (every `FolioPayment`), applied to the POS charges first and then to the room, plus `settledOutside` - the room amount not covered by folio payments on a booking marked `PAID` by hand (prepaid on an OTA, bank transfer: collected, just not through this system). `balanceDue` = `folioTotal` - `paidTotal` - `settledOutside`, never below zero; `creditBalance` is what was collected beyond `folioTotal` (a stay shortened after it was paid), which this system has no refund record for. A `CANCELLED` booking owes nothing for the room - `roomTotal` and `earlyDepartureFee` still show what it was priced at, but neither counts in `folioTotal`.
+         *     Charged: `roomTotal` (the nights stayed) + `earlyDepartureFee` + `overstayTotal` (the nights a checked-in guest stayed past check-out, `overstayNights` of them, each at the room type's price for that date, frozen when it accrued) + `roomChargesGross` (POS orders charged to the room) = `folioTotal`. Collected: `paidTotal` (every `FolioPayment`), applied to the POS charges first, then to the room, then to the overstay, plus `settledOutside` - the room amount not covered by folio payments on a booking marked `PAID` by hand (prepaid on an OTA, bank transfer: collected, just not through this system). `balanceDue` = `folioTotal` - `paidTotal` - `settledOutside`, never below zero; `creditBalance` is what was collected beyond `folioTotal` (a stay shortened after it was paid), which this system has no refund record for. A `CANCELLED` booking owes nothing for the room - `roomTotal` and `earlyDepartureFee` still show what it was priced at, but neither counts in `folioTotal`.
          */
         BookingFolio: {
             /** @description `Booking.totalPrice` - decimal(10,2) rendered as a string. */
@@ -6752,6 +7064,12 @@ export interface components {
             amountToMarkPaid?: string;
             /** @description Collected beyond what was charged - decimal(10,2) rendered as a string. */
             creditBalance: string;
+            /** @description Nights charged as overstay (a `CHECKED_IN` guest past `checkOut`; tonight counts while they are still in the house). 0 for everyone else, and always 0 for a cancelled or no-show booking. Nights the stay was later extended over, or tonight when the guest checks out, are no longer charged. */
+            overstayNights: number;
+            /** @description True when tonight's night is among `overstayNights` (so "49 nights" is "48 past the due date + tonight"). False once the guest has left, or before tonight's night has accrued. */
+            overstayIncludesTonight: boolean;
+            /** @description The price of those nights - decimal(10,2) rendered as a string. Part of `folioTotal` and `balanceDue`. */
+            overstayTotal: string;
             /** @description Number of ROOM_CHARGE payments this stay has ever generated (a raw historical count, not "how many are still unsettled") - same count as `GET /bookings/{id}/pos-orders` would return entries. */
             roomChargeCount: number;
         };
@@ -6792,7 +7110,7 @@ export interface components {
          * @description The fixed vocabulary of significant staff actions this system records. Deliberately not open-ended (a free-text action name) - a closed set is what makes "filter by action type" on `GET /audit-log` and a fixed dropdown in the admin UI possible at all. Adding a new kind of audited action means adding a value here (a plain `ALTER TYPE ... ADD VALUE` migration, same pattern already used for `Role`/`PrintDocumentType`), not widening this into a string.
          * @enum {string}
          */
-        AuditAction: "BOOKING_CREATED" | "BOOKING_STATUS_CHANGED" | "BOOKING_PAYMENT_NOTE_CHANGED" | "BOOKING_SCHEDULE_CHANGED" | "BOOKING_ROOM_ASSIGNED" | "BOOKING_RELOCATED" | "BOOKING_RELOCATION_UNDONE" | "BOOKING_REPRICED" | "BOOKING_CHECKED_IN" | "BOOKING_CHECKED_OUT" | "BOOKING_NO_SHOW_MARKED" | "BOOKING_FOLIO_PAYMENT_RECORDED" | "BOOKINGS_EXPORTED" | "ROOM_PRICE_CHANGED" | "RATE_OVERRIDE_CHANGED" | "ORDER_CLOSED" | "ORDER_CANCELLED" | "ROOM_CHARGE_POSTED" | "SHIFT_OPENED" | "SHIFT_CLOSED" | "SHIFT_EXPORTED" | "USER_CREATED" | "USER_ROLE_CHANGED" | "USER_ACTIVE_CHANGED" | "USER_PASSWORD_RESET" | "USER_FUNCTIONS_CHANGED" | "USER_CREDENTIALS_GRANTED" | "USER_OVERTIME_ELIGIBILITY_CHANGED" | "USER_ENROLLMENT_NUMBER_CHANGED" | "USER_STAFF_AREA_CHANGED" | "USER_FULL_NAME_CHANGED" | "USER_NAME_CHANGED" | "ROOM_UNIT_CREATED" | "ROOM_UNIT_UPDATED" | "ROOM_UNIT_DELETED" | "ROOM_UNIT_BLOCK_CREATED" | "ROOM_UNIT_BLOCK_DELETED" | "ROOM_UNIT_HOUSEKEEPING_CHANGED" | "ROOM_UNIT_POSITION_UPDATED" | "PROPERTY_MAP_IMAGE_UPDATED" | "PRINT_JOB_DISMISSED" | "SPA_APPOINTMENT_CREATED" | "SPA_APPOINTMENT_STATUS_CHANGED" | "POS_TABLE_POSITION_UPDATED" | "MAINTENANCE_TASK_CREATED" | "MAINTENANCE_TASK_STATUS_CHANGED" | "MAINTENANCE_TASK_BLOCKED" | "MAINTENANCE_TASK_BLOCK_LIFTED" | "GUEST_CREATED" | "GUEST_UPDATED" | "GUEST_DELETED" | "BOOKING_GUEST_LINKED" | "SPA_MAP_IMAGE_UPDATED" | "BOOKING_SEGMENT_ROOM_CHANGED" | "BOOKING_ROOMS_SWAPPED" | "SPA_APPOINTMENT_RESCHEDULED" | "SPA_APPOINTMENT_TREATMENT_ADDED" | "SPA_APPOINTMENT_TREATMENT_REMOVED" | "SPA_APPOINTMENT_TABLES_SWAPPED" | "SHIFT_CODE_CREATED" | "SHIFT_CODE_KIND_CHANGED" | "SHIFT_CODE_DISPLAY_COLOR_CHANGED" | "SHIFT_CODE_VERSIONED" | "EMPLOYEE_PATTERN_CHANGED" | "ROSTER_ENTRY_CREATED" | "ROSTER_ENTRY_MOVED" | "ROSTER_ENTRY_REASSIGNED" | "ROSTER_ENTRIES_SWAPPED" | "ROSTER_ENTRY_DELETED" | "ROSTER_ENTRY_LOCKED_CHANGED" | "ROSTER_MONTH_GENERATED" | "ROSTER_MONTH_COPIED" | "STAFF_AREA_COVERAGE_RULE_CHANGED" | "ATTENDANCE_PUNCH_RECORDED" | "ATTENDANCE_PUNCH_CORRECTED" | "ATTENDANCE_DAY_CORRECTED" | "RECEIPT_SETTINGS_UPDATED" | "RECEIPT_LOGO_CHANGED" | "EMPLOYEE_PAY_RATE_CHANGED" | "ROSTER_ACTUALS_EXPORTED" | "ROSTER_MONTH_IMPORTED" | "ROSTER_GRID_EXPORTED" | "ROSTER_GRID_IMPORTED" | "ATTENDANCE_DEVICE_CREATED" | "ATTENDANCE_DEVICE_UPDATED" | "ATTENDANCE_DEVICE_DELETED" | "MENU_ITEM_CREATED" | "MENU_ITEM_UPDATED" | "MENU_ITEM_DELETED" | "REVENUE_EXPORTED" | "LIFECYCLE_EMAIL_SETTINGS_UPDATED" | "NIGHT_AUDIT_CLOSED" | "VAT_SETTINGS_UPDATED" | "LEDGER_ENTRY_POSTED" | "LEDGER_ENTRY_REVERSED" | "LEDGER_ACCOUNT_CREATED" | "SITEMINDER_ROOM_TYPE_MAPPING_CREATED" | "SITEMINDER_ROOM_TYPE_MAPPING_UPDATED" | "SITEMINDER_ROOM_TYPE_MAPPING_DELETED" | "RESTAURANT_MAP_IMAGE_UPDATED" | "ORDER_ITEM_VOIDED" | "GYM_DEVICE_COMMAND" | "GYM_DEVICE_CREATED" | "GYM_DEVICE_UPDATED" | "GYM_DEVICE_DELETED" | "GYM_RESERVATION_CREATED" | "GYM_RESERVATION_UPDATED" | "GYM_RESERVATION_CANCELLED" | "GYM_AUTOMATION_RESULT" | "GYM_HALL_SETTINGS_UPDATED" | "LIGHTING_DEVICE_CREATED" | "LIGHTING_DEVICE_UPDATED" | "LIGHTING_DEVICE_DELETED" | "LIGHTING_DEVICE_COMMAND" | "NOTIFICATION_SETTINGS_UPDATED" | "NOTIFICATION_LINK_CODE_CREATED" | "NOTIFICATION_CHANNEL_LINKED" | "NOTIFICATION_CHANNEL_UNLINKED" | "NOTIFICATION_LANGUAGE_UPDATED" | "SHIFT_CHANGE_REQUESTED" | "SHIFT_CHANGE_CANCELLED" | "SHIFT_CHANGE_APPROVED" | "SHIFT_CHANGE_REJECTED" | "SHIFT_CHANGE_EXPIRED" | "STAFF_BOT_SETTINGS_UPDATED" | "HR_VACATION_CHANGED" | "STAFF_EVE_REMINDER_CHANGED" | "STAFF_THERAPIST_MORNING_CHANGED";
+        AuditAction: "BOOKING_CREATED" | "BOOKING_STATUS_CHANGED" | "BOOKING_PAYMENT_NOTE_CHANGED" | "BOOKING_SCHEDULE_CHANGED" | "BOOKING_ROOM_ASSIGNED" | "BOOKING_RELOCATED" | "BOOKING_RELOCATION_UNDONE" | "BOOKING_REPRICED" | "BOOKING_CHECKED_IN" | "BOOKING_CHECKED_OUT" | "BOOKING_NO_SHOW_MARKED" | "BOOKING_FOLIO_PAYMENT_RECORDED" | "BOOKINGS_EXPORTED" | "ROOM_PRICE_CHANGED" | "RATE_OVERRIDE_CHANGED" | "ORDER_CLOSED" | "ORDER_CANCELLED" | "ROOM_CHARGE_POSTED" | "SHIFT_OPENED" | "SHIFT_CLOSED" | "SHIFT_EXPORTED" | "USER_CREATED" | "USER_ROLE_CHANGED" | "USER_ACTIVE_CHANGED" | "USER_PASSWORD_RESET" | "USER_FUNCTIONS_CHANGED" | "USER_CREDENTIALS_GRANTED" | "USER_OVERTIME_ELIGIBILITY_CHANGED" | "USER_ENROLLMENT_NUMBER_CHANGED" | "USER_STAFF_AREA_CHANGED" | "USER_FULL_NAME_CHANGED" | "USER_NAME_CHANGED" | "ROOM_UNIT_CREATED" | "ROOM_UNIT_UPDATED" | "ROOM_UNIT_DELETED" | "ROOM_UNIT_BLOCK_CREATED" | "ROOM_UNIT_BLOCK_DELETED" | "ROOM_UNIT_HOUSEKEEPING_CHANGED" | "ROOM_UNIT_POSITION_UPDATED" | "PROPERTY_MAP_IMAGE_UPDATED" | "PRINT_JOB_DISMISSED" | "SPA_APPOINTMENT_CREATED" | "SPA_APPOINTMENT_STATUS_CHANGED" | "POS_TABLE_POSITION_UPDATED" | "MAINTENANCE_TASK_CREATED" | "MAINTENANCE_TASK_STATUS_CHANGED" | "MAINTENANCE_TASK_BLOCKED" | "MAINTENANCE_TASK_BLOCK_LIFTED" | "GUEST_CREATED" | "GUEST_UPDATED" | "GUEST_DELETED" | "BOOKING_GUEST_LINKED" | "SPA_MAP_IMAGE_UPDATED" | "BOOKING_SEGMENT_ROOM_CHANGED" | "BOOKING_ROOMS_SWAPPED" | "SPA_APPOINTMENT_RESCHEDULED" | "SPA_APPOINTMENT_TREATMENT_ADDED" | "SPA_APPOINTMENT_TREATMENT_REMOVED" | "SPA_APPOINTMENT_TABLES_SWAPPED" | "SHIFT_CODE_CREATED" | "SHIFT_CODE_KIND_CHANGED" | "SHIFT_CODE_DISPLAY_COLOR_CHANGED" | "SHIFT_CODE_VERSIONED" | "EMPLOYEE_PATTERN_CHANGED" | "ROSTER_ENTRY_CREATED" | "ROSTER_ENTRY_MOVED" | "ROSTER_ENTRY_REASSIGNED" | "ROSTER_ENTRIES_SWAPPED" | "ROSTER_ENTRY_DELETED" | "ROSTER_ENTRY_LOCKED_CHANGED" | "ROSTER_MONTH_GENERATED" | "ROSTER_MONTH_COPIED" | "STAFF_AREA_COVERAGE_RULE_CHANGED" | "ATTENDANCE_PUNCH_RECORDED" | "ATTENDANCE_PUNCH_CORRECTED" | "ATTENDANCE_DAY_CORRECTED" | "RECEIPT_SETTINGS_UPDATED" | "RECEIPT_LOGO_CHANGED" | "EMPLOYEE_PAY_RATE_CHANGED" | "ROSTER_ACTUALS_EXPORTED" | "ROSTER_MONTH_IMPORTED" | "ROSTER_GRID_EXPORTED" | "ROSTER_GRID_IMPORTED" | "ATTENDANCE_DEVICE_CREATED" | "ATTENDANCE_DEVICE_UPDATED" | "ATTENDANCE_DEVICE_DELETED" | "MENU_ITEM_CREATED" | "MENU_ITEM_UPDATED" | "MENU_ITEM_DELETED" | "REVENUE_EXPORTED" | "LIFECYCLE_EMAIL_SETTINGS_UPDATED" | "NIGHT_AUDIT_CLOSED" | "VAT_SETTINGS_UPDATED" | "SERVICE_CHARGE_SETTINGS_UPDATED" | "BOOKING_TRACKER_TARGET_UPDATED" | "BOOKING_TRACKER_SNAPSHOT_UPDATED" | "LEDGER_ENTRY_POSTED" | "LEDGER_ENTRY_REVERSED" | "LEDGER_ACCOUNT_CREATED" | "SITEMINDER_ROOM_TYPE_MAPPING_CREATED" | "SITEMINDER_ROOM_TYPE_MAPPING_UPDATED" | "SITEMINDER_ROOM_TYPE_MAPPING_DELETED" | "RESTAURANT_MAP_IMAGE_UPDATED" | "ORDER_ITEM_VOIDED" | "GYM_DEVICE_COMMAND" | "GYM_DEVICE_CREATED" | "GYM_DEVICE_UPDATED" | "GYM_DEVICE_DELETED" | "GYM_RESERVATION_CREATED" | "GYM_RESERVATION_UPDATED" | "GYM_RESERVATION_CANCELLED" | "GYM_AUTOMATION_RESULT" | "GYM_HALL_SETTINGS_UPDATED" | "LIGHTING_DEVICE_CREATED" | "LIGHTING_DEVICE_UPDATED" | "LIGHTING_DEVICE_DELETED" | "LIGHTING_DEVICE_COMMAND" | "NOTIFICATION_SETTINGS_UPDATED" | "NOTIFICATION_LINK_CODE_CREATED" | "NOTIFICATION_CHANNEL_LINKED" | "NOTIFICATION_CHANNEL_UNLINKED" | "NOTIFICATION_LANGUAGE_UPDATED" | "SHIFT_CHANGE_REQUESTED" | "SHIFT_CHANGE_CANCELLED" | "SHIFT_CHANGE_APPROVED" | "SHIFT_CHANGE_REJECTED" | "SHIFT_CHANGE_EXPIRED" | "STAFF_BOT_SETTINGS_UPDATED" | "HR_VACATION_CHANGED" | "STAFF_EVE_REMINDER_CHANGED" | "STAFF_THERAPIST_MORNING_CHANGED";
         /**
          * @description Which kind of record `AuditLogEntry.entityId` refers to. Paired with `entityId` to look up one record's own history (e.g. a booking's). Values are SCREAMING_SNAKE_CASE, not the PascalCase entity class names, deliberately: Spring MVC's default `@RequestParam` enum conversion for a query parameter (unlike Jackson's JSON body deserialization) uses the enum constant's own `name()`, not a custom `@JsonValue` - a PascalCase value here would deserialize correctly in a JSON response body but fail to bind as a query parameter (`entityType=Booking` 400s while `entityType=BOOKING` works), which is exactly the asymmetry every other enum in this API avoids by keeping its JSON value identical to its Java constant name.
          * @enum {string}
@@ -6852,11 +7170,11 @@ export interface components {
             totalPrice: string;
             /** @description Optional. If sent, must be `THB` - anything else is rejected, so a price in another currency can't be booked as baht. */
             currency?: string;
-            /** @description The channel name as SiteMinder displays it. Mapped to `BookingChannel`: names starting with Booking.com, Expedia, Agoda or Airbnb map to those values; "Direct" and SiteMinder's own booking engine (the hotel's website) map to `DIRECT`; anything else maps to `OTHER`. The raw name is kept as `Booking.externalChannel` either way. */
+            /** @description The channel name as SiteMinder displays it. Mapped to `BookingChannel`: names starting with Booking.com, Expedia, Agoda, Airbnb, Hotelbeds or Ctrip / Trip.com map to those values; "Direct" and SiteMinder's own booking engine (the hotel's website) map to `DIRECT`; anything else maps to `OTHER`. The raw name is kept as `Booking.externalChannel` either way. */
             channel: string;
             /**
              * Format: date-time
-             * @description SiteMinder's "Booked on" time, with its UTC offset.
+             * @description SiteMinder's "Booked on" time, with its UTC offset. Stored as `Booking.bookedAt` on create (and on an update only while still empty) - the booking tracker's booking date.
              */
             bookedAt: string;
             /**
@@ -7497,8 +7815,13 @@ export interface components {
             id: string;
             /** @description Decimal(10,2) string, `BookingFolio.balanceDue`. Present on every `unpaidBalances` row. */
             balanceDue?: string;
-            /** @description Nights a still-`CHECKED_IN` guest has stayed past `checkOut` with nothing agreed or charged: `OverstayRule`'s nights `[checkOut, date]`, counted inclusively, so it is one more than the days overdue shown next to it. `0` for a guest due out on `date` (the departure night is still sellable), for anyone who is not checked in, and on every `missedArrivals` and `unpaidBalances` row. A warning only - nothing is charged for these nights and no revenue report counts them. */
+            settlement?: components["schemas"]["SettlementStatus"];
+            /** @description True when `unpaidOverstayNights` counts tonight - the reviewed date is today and the guest is still in the house. For a past date the count runs through that date's night, which was not "tonight". */
+            overstayIncludesTonight?: boolean;
+            /** @description Nights a still-`CHECKED_IN` guest has stayed past `checkOut`, which are charged to the booking as its overstay (`BookingFolio.overstayNights`): `OverstayRule`'s nights `[checkOut, date]`, counted inclusively, so it is one more than the days overdue shown next to it. `0` for a guest due out on `date` (the departure night is still sellable), for anyone who is not checked in, and on every `missedArrivals` and `unpaidBalances` row. The nights are on the guest's folio and in their balance; a stay finished with such a balance is listed under `unpaidBalances`. */
             unpaidOverstayNights: number;
+            /** @description Decimal(10,2) string: those `unpaidOverstayNights` valued at the room type's price for each date (price grid, else base price) - the price they are charged at. Absent when there are no overstay nights. */
+            unpaidOverstayValue?: string;
             guestName: string;
             /** @description The room type's name. */
             roomName: string;
@@ -7603,7 +7926,7 @@ export interface components {
             adr: string | null;
         };
         /**
-         * @description `COM` complimentary, `DIR` direct (`DIRECT`/`PHONE`), `HFO` house use, `OTA` online travel agents (including a SiteMinder-imported `OTHER`), `OTH` other / not recorded (a staff-entered `OTHER` booking), `WLK` walk-in. Derived from a booking's `purpose` and `channel`, never stored - see `GET /reports/market-segment`.
+         * @description `COM` complimentary, `DIR` direct (`DIRECT`/`PHONE`), `HFO` house use, `OTA` online travel agents (including a SiteMinder-imported `OTHER`, and `CTRIP`, `HOTELBEDS` and `AGENT` - the Z360 layout has six fixed lines, so a travel agent counts as an intermediary sale), `OTH` other / not recorded (a staff-entered `OTHER` booking), `WLK` walk-in. Derived from a booking's `purpose` and `channel`, never stored - see `GET /reports/market-segment`.
          * @enum {string}
          */
         MarketSegment: "COM" | "DIR" | "HFO" | "OTA" | "OTH" | "WLK";
@@ -7803,10 +8126,10 @@ export interface components {
             type: components["schemas"]["LedgerAccountType"];
         };
         /**
-         * @description What posted an entry. `BOOKING` - a booking became `PAID`, or left it (the mirror); `sourceId` is the booking id. `POS_ORDER` - a POS order was closed; `sourceId` is the order id. `FOLIO_PAYMENT` - money collected against a booking's room charges; `sourceId` is the folio payment id. `MANUAL` - `POST /ledger/entries` or `POST /ledger/entries/{id}/reverse`; `sourceId` is null.
+         * @description What posted an entry. `OVERSTAY` - a night a checked-in guest stayed past check-out accrued (Dr Guest Ledger, Cr Room Revenue + VAT, dated that night), or was voided (the mirror); `sourceId` is the overstay charge id. `BOOKING` - a booking became `PAID`, or left it (the mirror); `sourceId` is the booking id. `POS_ORDER` - a POS order was closed; `sourceId` is the order id. `FOLIO_PAYMENT` - money collected against a booking's room charges; `sourceId` is the folio payment id. `MANUAL` - `POST /ledger/entries` or `POST /ledger/entries/{id}/reverse`; `sourceId` is null.
          * @enum {string}
          */
-        JournalSourceType: "BOOKING" | "POS_ORDER" | "FOLIO_PAYMENT" | "MANUAL";
+        JournalSourceType: "BOOKING" | "POS_ORDER" | "FOLIO_PAYMENT" | "MANUAL" | "OVERSTAY";
         /** @description One balanced, immutable posting. `totalDebit` always equals `totalCredit` - the server rejects anything else before saving. */
         JournalEntry: {
             id: string;
@@ -14615,6 +14938,162 @@ export interface operations {
             403: components["responses"]["ForbiddenCashierPlus"];
         };
     };
+    getBookingTrackerReport: {
+        parameters: {
+            query?: {
+                /** @description First stay month (inclusive), `YYYY-MM`. */
+                fromMonth?: string;
+                /** @description Last stay month (inclusive), `YYYY-MM`. At most 12 months from `fromMonth`. */
+                toMonth?: string;
+                /** @description Narrow the channel and trends sections to this month. Must lie inside the range. Omitted means all stays. */
+                stayMonth?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookingTrackerReport"];
+                };
+            };
+            /** @description A month that is not `YYYY-MM`, only one of `fromMonth`/`toMonth`, `toMonth` before `fromMonth`, a range over 12 months, or a `stayMonth` outside the range. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    exportBookingTracker: {
+        parameters: {
+            query?: {
+                fromMonth?: string;
+                toMonth?: string;
+                stayMonth?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The .xlsx workbook. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            /** @description Same as `GET /reports/booking-tracker`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    updateBookingTrackerMonth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                month: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BookingTrackerMonthTargetsInput"];
+            };
+        };
+        responses: {
+            /** @description The month's inputs as stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookingTrackerMonthTargets"];
+                };
+            };
+            /** @description A malformed month, or a negative / over-precise figure. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    updateBookingTrackerSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BookingTrackerSnapshotUpdateInput"];
+            };
+        };
+        responses: {
+            /** @description The snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookingTrackerSnapshot"];
+                };
+            };
+            /** @description A text over its length limit, or a malformed date. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+            /** @description No such snapshot. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
+        };
+    };
     getManagerReport: {
         parameters: {
             query?: {
@@ -15305,6 +15784,63 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrintAttemptResult"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getServiceChargeSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current rate. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceChargeSettings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateServiceChargeSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceChargeSettingsUpdateInput"];
+            };
+        };
+        responses: {
+            /** @description The updated rate. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceChargeSettings"];
+                };
+            };
+            /** @description `serviceChargeRate` missing, below 0, above 99.99, or with more than two decimals. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
                 };
             };
             401: components["responses"]["Unauthorized"];
