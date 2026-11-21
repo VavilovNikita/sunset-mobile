@@ -1073,7 +1073,7 @@ export interface paths {
         put?: never;
         /**
          * Move a guest to a different room partway through their stay
-         * @description Requires CASHIER or above. Splits the segment covering `effectiveDate` into two: the existing room/unit keeps `[that segment's checkIn, effectiveDate)`, and a new segment for `[effectiveDate, that segment's checkOut)` takes `roomId`/`roomUnitId` - the new room may be a different room *type* than the one being left, at that type's own price. `effectiveDate` must fall strictly after the containing segment's own checkIn (relocating on a segment's first night is "assign this segment a different room", i.e. `PUT /bookings/{id}/room-unit` or `PATCH /bookings/{id}/schedule` when there is only one segment - not a mid-stay move). Same three checks on the *new* room/unit as `PUT /bookings/{id}/room-unit` (same type, active, free for the new segment's dates), same `Serializable` race-safety as `POST /bookings`. See `POST /bookings/{id}/relocate/quote` to preview the recalculated total before calling this, and `POST /bookings/{id}/undo-relocation` to reverse it. Recorded in the audit log with who, from which room, to which room, and effective from which date.
+         * @description Requires CASHIER or above. Moves the guest to `roomId`/`roomUnitId` from `effectiveDate` (the first night spent in the new room) to the end of the segment covering that date. Two shapes, chosen by where `effectiveDate` falls in that segment: **after the segment's first night** - the segment is split: the existing room/unit keeps `[segment checkIn, effectiveDate)` (past nights stay where the guest slept) and a new segment for `[effectiveDate, segment checkOut)` takes the new room, which `undo-relocation` can merge back; **on the segment's first night** (a guest arriving today, or any move that starts with the segment's own first night) - nothing is split: the whole segment changes room, and for a booking with a single segment `Booking.roomId` changes with it. There is no boundary to undo in that case. The new room may be a different room *type*. **Price (`rateMode`).** Same room type: always `KEEP_RATE` (the nights keep their frozen prices; `NEW_RATE` is a 400, use `POST /bookings/{id}/reprice`). Different room type: `NEW_RATE` (default) prices the moved nights from today forward at the new type's current rate; `KEEP_RATE` keeps the moved nights' agreed prices exactly - a complimentary upgrade or a move the hotel caused - and is **MANAGER or above** (403 for CASHIER, like `reprice` and a hand-typed price). Nights before today are never repriced. An `effectiveDate` before today (a back-dated move) is MANAGER or above (403 otherwise). Same three checks on the *new* room/unit as `PUT /bookings/{id}/room-unit` (same type for a unit, active, free for the moved dates), same `Serializable` race-safety as `POST /bookings`. A guest who is `CHECKED_IN` and has already moved (the date is today or earlier) leaves the old room marked dirty at once. See `POST /bookings/{id}/relocate/quote` to preview both totals before calling this. Recorded in the audit log with who, from which room, to which room, effective from which date, the rate mode and the old and new total.
          */
         post: operations["relocateBooking"];
         delete?: never;
@@ -1095,7 +1095,7 @@ export interface paths {
         put?: never;
         /**
          * Preview the price/availability of a relocation without applying it
-         * @description Requires CASHIER or above. Non-mutating preview for `POST /bookings/{id}/relocate` - same request body, no `Serializable` transaction. `totalPrice` in the response is the whole booking's *new* total (every unaffected segment's price, plus the shrunk old segment's recomputed price, plus the new segment's price) - the same shape `POST /bookings/{id}/schedule/quote` returns, reused rather than a second near-identical response schema; `nights` describes the *new* segment being created.
+         * @description Requires CASHIER or above. Non-mutating preview for `POST /bookings/{id}/relocate` - same request body, no `Serializable` transaction. Everything the screen shows comes from here (a client never subtracts prices): the booking's current total, its new total and the difference under each rate that could apply. `totalPrice`/`nights`/`available`/`reason` keep the `BookingScheduleQuote` meaning (`totalPrice` is the whole booking's new total under the effective rate mode; `nights` counts the moved nights). A CASHIER gets both rates for information, but `mayKeepRate` says whether this caller can apply `KEEP_RATE`. The same 403 rules as the apply call (a past `effectiveDate` needs MANAGER or above) apply to the preview.
          */
         post: operations["quoteBookingRelocation"];
         delete?: never;
@@ -5962,11 +5962,17 @@ export interface components {
         };
         /** @description Body of `POST /bookings/{id}/relocate` and `POST /bookings/{id}/relocate/quote`. Unlike `BookingScheduleInput`, `roomId` (the room *type*) can change here - a relocation is exactly the operation that lets a guest move to a different type of room mid-stay, at that type's own price. `roomUnitId: null` is legal (relocate to "this type, unit not yet chosen"). */
         RelocationInput: {
-            /** @description The first night of the new segment. Must fall strictly after the start of the segment currently covering it. */
+            /** @description The first night spent in the new room. May be the first night of the segment currently covering it (then the whole segment changes room) or any later night (then the segment is split). Before today: MANAGER or above. */
             effectiveDate: string;
             roomId: string;
             roomUnitId?: string | null;
+            rateMode?: components["schemas"]["RelocationRateMode"];
         };
+        /**
+         * @description What the moved nights cost. `KEEP_RATE` - exactly the frozen per-night prices they already have (manual and SiteMinder prices included); `NEW_RATE` - the new room type's current rate, from today forward. Omitted means `NEW_RATE` across room types and `KEEP_RATE` within one (`NEW_RATE` within one type is a 400 - use `POST /bookings/{id}/reprice`). `KEEP_RATE` across room types needs MANAGER or above.
+         * @enum {string}
+         */
+        RelocationRateMode: "KEEP_RATE" | "NEW_RATE";
         /** @description Body of `POST /bookings/{id}/undo-relocation`. */
         RelocationUndoInput: {
             /** @description The boundary date between the two segments to merge - some segment's `checkOut` equal to the next segment's `checkIn`. */
@@ -5980,6 +5986,31 @@ export interface components {
             available: boolean;
             /** @description Set when `available` is `false` - the same wording `PATCH /bookings/{id}/schedule` would reject with. */
             reason: string | null;
+        };
+        /** @description Response of `POST /bookings/{id}/relocate/quote`. Every figure is computed by the server with the same code the apply call uses, so what is shown before confirming is what is charged (to the satang). All amounts are decimal(10,2) strings of the *whole booking*. `totalPrice`, `nights`, `available` and `reason` mean what they do in `BookingScheduleQuote` (`totalPrice` is for `rateMode`, the mode that would be applied: the requested one, else the default for this move). */
+        RelocationQuote: {
+            totalPrice: string;
+            /** @description Nights that move to the new room. */
+            nights: number;
+            available: boolean;
+            reason: string | null;
+            /** @description The booking's total today. */
+            currentTotalPrice: string;
+            /** @description The new room is of the type the guest is leaving - the price cannot change. */
+            sameRoomType: boolean;
+            /** @description The move starts on the segment's first night, so the whole segment changes room and no split (nor undo) is involved. */
+            wholeSegment: boolean;
+            rateMode: components["schemas"]["RelocationRateMode"];
+            /** @description Whether the caller may apply `KEEP_RATE` for this move (always true within one room type). */
+            mayKeepRate: boolean;
+            /** @description The booking's total if the moved nights keep their agreed prices. */
+            keepRateTotalPrice: string;
+            /** @description `keepRateTotalPrice` minus `currentTotalPrice`, signed ("0.00" for a move that changes nothing). */
+            keepRatePriceDifference: string;
+            /** @description The booking's total if the moved nights are priced at the new type's current rate. Absent within one room type. */
+            newRateTotalPrice?: string | null;
+            /** @description `newRateTotalPrice` minus `currentTotalPrice`, signed. Absent within one room type. */
+            newRatePriceDifference?: string | null;
         };
         /** @description Body of `POST /bookings/{id}/reprice` and `POST /bookings/{id}/reprice/quote`. */
         RepriceInput: {
@@ -11930,7 +11961,7 @@ export interface operations {
                     "application/json": components["schemas"]["Booking"];
                 };
             };
-            /** @description Body failed validation, `effectiveDate` does not fall strictly inside an existing segment, or `roomUnitId` belongs to a different room type / is not active. */
+            /** @description Body failed validation, `effectiveDate` is outside the stay, `roomUnitId` belongs to a different room type / is not active, the booking is already in that room, or `rateMode: NEW_RATE` was sent for a room of the same type. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -11940,7 +11971,15 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-            403: components["responses"]["ForbiddenCashierPlus"];
+            /** @description Not signed in as CASHIER or above - or a CASHIER asked for `rateMode: KEEP_RATE` across room types, or for an `effectiveDate` before today (both MANAGER or above). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
             /** @description Booking, room, or room unit not found. */
             404: {
                 headers: {
@@ -11976,13 +12015,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Computed whole-booking total and availability for the requested relocation. Returned even when `available: false`. */
+            /** @description Computed totals and availability for the requested relocation. Returned even when `available: false`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BookingScheduleQuote"];
+                    "application/json": components["schemas"]["RelocationQuote"];
                 };
             };
             /** @description Body failed validation. */
@@ -11995,7 +12034,15 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-            403: components["responses"]["ForbiddenCashierPlus"];
+            /** @description Not CASHIER or above, or a past `effectiveDate` requested by a CASHIER. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorMessage"];
+                };
+            };
             /** @description Booking or room not found. */
             404: {
                 headers: {
