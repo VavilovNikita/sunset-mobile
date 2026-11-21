@@ -6886,6 +6886,130 @@ paths:
         "403":
           $ref: "#/components/responses/ForbiddenManagerPlus"
 
+  /reports/future-bookings:
+    get:
+      operationId: getFutureBookingsReport
+      tags: [Reports]
+      summary: Bookings arriving in a date range, by status (Tentative / Confirmed / Room paid)
+      description: >
+        Requires role `MANAGER` or above, same floor as the rest of `/reports/*`.
+
+
+        **Rows** are bookings whose `checkIn` is in `[from, to]` (inclusive hotel days,
+        Asia/Bangkok), that are not `CANCELLED` and not marked no-show, sorted by `checkIn`, then
+        guest name, then id. `status` (repeatable) narrows to `NEW` (Tentative), `CONFIRMED` and/or
+        `PAID` (Room paid); omitted means all three - everything except cancelled bookings.
+        `CANCELLED` is not accepted (400). `from` defaults to today and `to` to 90 days after
+        `from`; the range may be at most 366 days.
+
+
+        `balanceDue` is `BookingFolioCalculator`'s figure, the one every booking carries.
+        `roomName` and `roomUnitLabel` are those of the booking's first night. `nights` is the
+        agreed stay (`checkOut` - `checkIn`).
+
+
+        **Summary** counts bookings and nights per status, and adds the sum of `totalPrice` (the
+        room price of the stay; `earlyDepartureFee` and POS charges are not in it), all computed
+        here: a client adds nothing up.
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: status
+          in: query
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/BookingStatus"
+      responses:
+        "200":
+          description: The report.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FutureBookingsReport"
+        "400":
+          description: A bad date, `from` after `to`, a range over 366 days, or `status=CANCELLED`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationError"
+                  - $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenManagerPlus"
+
+  /reports/future-bookings/export:
+    get:
+      operationId: exportFutureBookings
+      tags: [Reports]
+      summary: The future-bookings report as CSV
+      description: >
+        Requires role `MANAGER` or above. Same parameters, rules and rows as `GET
+        /reports/future-bookings`; one row per booking, notes in their own column, status as the
+        label staff read (Tentative / Confirmed / Room paid). Built with `CsvBuilder` (BOM,
+        `sep=,`, spreadsheet-safe cells) like the other CSV exports. The file is named
+        `future-bookings_<from>_<to>.csv`. Audited as a bookings export, with the number of rows.
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: status
+          in: query
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/BookingStatus"
+      responses:
+        "200":
+          description: CSV file.
+          content:
+            text/csv:
+              schema:
+                type: string
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+        "400":
+          description: As `GET /reports/future-bookings`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationError"
+                  - $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenManagerPlus"
+
   /reports/revenue-statistic:
     get:
       operationId: getRevenueStatisticReport
@@ -12873,6 +12997,11 @@ components:
     BookingStatus:
       type: string
       enum: [NEW, CONFIRMED, PAID, CANCELLED]
+      description: >
+        The values are stable; what staff read is a label. `NEW` is shown as **Tentative** (a
+        provisional booking - the hotel's workbook calls it an enquiry), `CONFIRMED` as
+        **Confirmed**, `PAID` as **Room paid** and `CANCELLED` as **Cancelled**. There is no
+        separate "tentative" status. Guest-facing screens keep their own wording.
 
     BookingChannel:
       type: string
@@ -14306,6 +14435,22 @@ components:
             spread over the nights like a SiteMinder price and frozen per night, so a later
             extension prices only the new nights at the current rate. The audit entry records
             that the price was manual, with this figure and the rate-plan figure it replaced.
+        status:
+          $ref: "#/components/schemas/BookingStatus"
+          description: >
+            Optional. Only `NEW` (shown to staff as **Tentative**) or `CONFIRMED` (**Confirmed**);
+            anything else is a 400 on this field. Omitted means `NEW`, as before, so older clients
+            keep working. Written in the same transaction as the booking and named in the
+            `BOOKING_CREATED` audit entry. Changing it later is `PATCH /bookings/{id}`.
+        notes:
+          type: string
+          maxLength: 1000
+          nullable: true
+          x-sensitive: true
+          description: >
+            Optional staff notes for this stay (airport pickup, allergies, special requests).
+            Trimmed; blank means none. More than 1000 characters (after trimming) is a 400 on this
+            field. Not shown to the guest anywhere.
       # Cross-field rule enforced server-side, not expressible in JSON Schema: checkIn must be strictly before checkOut.
 
     StaffBookingQuoteInput:
@@ -14800,6 +14945,15 @@ components:
           type: string
           nullable: true
           x-sensitive: true
+        notes:
+          type: string
+          nullable: true
+          x-sensitive: true
+          description: >
+            Staff notes for this stay (airport pickup, allergies, special requests), up to 1000
+            characters; null when there are none. About the stay, unlike `paymentNote` (about the
+            payment) and `Guest.notes` (about the person). Staff-only: never in a guest-facing
+            response. The SiteMinder import neither sets nor clears it.
         occupancyStatus:
           $ref: "#/components/schemas/OccupancyStatus"
         stayStatus:
@@ -14957,6 +15111,16 @@ components:
             - $ref: "#/components/schemas/BreakfastRate"
           nullable: true
           description: Optional. Omitted leaves it as it is, `null` clears it.
+        notes:
+          type: string
+          maxLength: 1000
+          nullable: true
+          x-sensitive: true
+          description: >
+            Optional. The booking's staff notes (`Booking.notes`). Omitted leaves them as they are,
+            `null` or a blank string clears them, anything else replaces them (trimmed, at most 1000
+            characters - 400 on this field otherwise). CASHIER+, like the rest of this form. The
+            audit entry says that notes were set, changed or removed, never what they say.
         cancellationReason:
           type: string
           maxLength: 500
@@ -14976,6 +15140,88 @@ components:
             unless this carries a payment of exactly that amount - otherwise 409. When nothing is
             owed it is optional and, if sent, recorded like any folio payment (and rejected the
             same way if it would overpay).
+
+    FutureBookingsReport:
+      type: object
+      required: [from, to, statuses, rows, summary]
+      properties:
+        from:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          description: The range actually used (defaults applied).
+        to:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+        statuses:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookingStatus"
+          description: The statuses actually used (all of `NEW`, `CONFIRMED`, `PAID` when none were asked for).
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/FutureBookingRow"
+        summary:
+          type: array
+          description: One entry per status in `statuses`, in the order `NEW`, `CONFIRMED`, `PAID`; zero counts are listed.
+          items:
+            $ref: "#/components/schemas/FutureBookingsStatusSummary"
+
+    FutureBookingRow:
+      type: object
+      required: [bookingId, guestName, roomName, roomUnitLabel, checkIn, checkOut, nights, adults, children, channel, status, totalPrice, balanceDue, notes]
+      properties:
+        bookingId:
+          type: string
+        guestName:
+          type: string
+        roomName:
+          type: string
+          description: Room type of the booking's first night.
+        roomUnitLabel:
+          type: string
+          nullable: true
+          description: Physical room of the first night; null while none is assigned.
+        checkIn:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+        checkOut:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+        nights:
+          type: integer
+        adults:
+          type: integer
+        children:
+          type: integer
+        channel:
+          $ref: "#/components/schemas/BookingChannel"
+        status:
+          $ref: "#/components/schemas/BookingStatus"
+        totalPrice:
+          type: string
+          description: Decimal(10,2) rendered as a string. Same as `Booking.totalPrice`.
+        balanceDue:
+          type: string
+          description: Decimal(10,2) rendered as a string. Same as `Booking.balanceDue`.
+        notes:
+          type: string
+          nullable: true
+          x-sensitive: true
+
+    FutureBookingsStatusSummary:
+      type: object
+      required: [status, bookings, nights, totalPrice]
+      properties:
+        status:
+          $ref: "#/components/schemas/BookingStatus"
+        bookings:
+          type: integer
+        nights:
+          type: integer
+        totalPrice:
+          type: string
+          description: Sum of the rows' `totalPrice`, Decimal(14,2) as a string.
 
     Guest:
       type: object

@@ -2661,6 +2661,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reports/future-bookings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bookings arriving in a date range, by status (Tentative / Confirmed / Room paid)
+         * @description Requires role `MANAGER` or above, same floor as the rest of `/reports/*`.
+         *
+         *     **Rows** are bookings whose `checkIn` is in `[from, to]` (inclusive hotel days, Asia/Bangkok), that are not `CANCELLED` and not marked no-show, sorted by `checkIn`, then guest name, then id. `status` (repeatable) narrows to `NEW` (Tentative), `CONFIRMED` and/or `PAID` (Room paid); omitted means all three - everything except cancelled bookings. `CANCELLED` is not accepted (400). `from` defaults to today and `to` to 90 days after `from`; the range may be at most 366 days.
+         *
+         *     `balanceDue` is `BookingFolioCalculator`'s figure, the one every booking carries. `roomName` and `roomUnitLabel` are those of the booking's first night. `nights` is the agreed stay (`checkOut` - `checkIn`).
+         *
+         *     **Summary** counts bookings and nights per status, and adds the sum of `totalPrice` (the room price of the stay; `earlyDepartureFee` and POS charges are not in it), all computed here: a client adds nothing up.
+         */
+        get: operations["getFutureBookingsReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/future-bookings/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The future-bookings report as CSV
+         * @description Requires role `MANAGER` or above. Same parameters, rules and rows as `GET /reports/future-bookings`; one row per booking, notes in their own column, status as the label staff read (Tentative / Confirmed / Room paid). Built with `CsvBuilder` (BOM, `sep=,`, spreadsheet-safe cells) like the other CSV exports. The file is named `future-bookings_<from>_<to>.csv`. Audited as a bookings export, with the number of rows.
+         */
+        get: operations["exportFutureBookings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reports/revenue-statistic": {
         parameters: {
             query?: never;
@@ -5356,7 +5402,10 @@ export interface components {
         PaymentMethod: "CASH" | "CARD" | "ROOM_CHARGE" | "OTHER";
         /** @enum {string} */
         ShiftStatus: "OPEN" | "CLOSED";
-        /** @enum {string} */
+        /**
+         * @description The values are stable; what staff read is a label. `NEW` is shown as **Tentative** (a provisional booking - the hotel's workbook calls it an enquiry), `CONFIRMED` as **Confirmed**, `PAID` as **Room paid** and `CANCELLED` as **Cancelled**. There is no separate "tentative" status. Guest-facing screens keep their own wording.
+         * @enum {string}
+         */
         BookingStatus: "NEW" | "CONFIRMED" | "PAID" | "CANCELLED";
         /**
          * @description How a booking reached the hotel - a label staff record from what they already know (the guest booked by phone, walked in, said they found the hotel on Airbnb). Not an OTA integration: nothing is synced with any channel. `POST /bookings` (the public form) is always `DIRECT`, set server-side. Unrelated to the internal public-form-vs-front-desk distinction that drives auto-expiry of unconfirmed public inquiries, which is never exposed and never changes when this does. Bookings made before this field existed read `DIRECT` if they came through the public form and `OTHER` if staff entered them (their real channel was never recorded). Independent of `BookingPurpose`: a complimentary stay still has the channel it arrived by.
@@ -5869,6 +5918,10 @@ export interface components {
             guestId?: string | null;
             /** @description Optional price for the whole stay, entered by staff instead of the rate-plan price (a negotiated or package rate). MANAGER or above only - a CASHIER sending it gets 403; leave it out (or `null`) and the stay is priced from `Room.basePrice`/`RatePlan` as usual. Zero or more, at most two decimals (400 on this field otherwise). The total is spread over the nights like a SiteMinder price and frozen per night, so a later extension prices only the new nights at the current rate. The audit entry records that the price was manual, with this figure and the rate-plan figure it replaced. */
             agreedTotal?: string | null;
+            /** @description Optional. Only `NEW` (shown to staff as **Tentative**) or `CONFIRMED` (**Confirmed**); anything else is a 400 on this field. Omitted means `NEW`, as before, so older clients keep working. Written in the same transaction as the booking and named in the `BOOKING_CREATED` audit entry. Changing it later is `PATCH /bookings/{id}`. */
+            status?: components["schemas"]["BookingStatus"];
+            /** @description Optional staff notes for this stay (airport pickup, allergies, special requests). Trimmed; blank means none. More than 1000 characters (after trimming) is a 400 on this field. Not shown to the guest anywhere. */
+            notes?: string | null;
         };
         /** @description Body of `POST /bookings/staff/quote` - the fields of `StaffBookingCreateInput` that decide price and availability. */
         StaffBookingQuoteInput: {
@@ -6037,6 +6090,8 @@ export interface components {
             /** @description Children in the party. Bookings made before this field existed read 0. */
             children: number;
             paymentNote: string | null;
+            /** @description Staff notes for this stay (airport pickup, allergies, special requests), up to 1000 characters; null when there are none. About the stay, unlike `paymentNote` (about the payment) and `Guest.notes` (about the person). Staff-only: never in a guest-facing response. The SiteMinder import neither sets nor clears it. */
+            notes?: string | null;
             occupancyStatus: components["schemas"]["OccupancyStatus"];
             stayStatus?: components["schemas"]["StayStatus"];
             settlement?: components["schemas"]["SettlementStatus"];
@@ -6103,10 +6158,49 @@ export interface components {
             breakfastGuests?: number | null;
             /** @description Optional. Omitted leaves it as it is, `null` clears it. */
             breakfastRate?: components["schemas"]["BreakfastRate"] | null;
+            /** @description Optional. The booking's staff notes (`Booking.notes`). Omitted leaves them as they are, `null` or a blank string clears them, anything else replaces them (trimmed, at most 1000 characters - 400 on this field otherwise). CASHIER+, like the rest of this form. The audit entry says that notes were set, changed or removed, never what they say. */
+            notes?: string | null;
             /** @description Why the booking is being cancelled. Read only when this request moves the booking into `CANCELLED` (ignored otherwise); stored as `Booking.cancellationReason` and repeated in that status change's audit entry. Optional at the API so system paths (the SiteMinder import, the expiry sweep) keep working; the admin screens require it before they send a cancel. */
             cancellationReason?: string | null;
             /** @description The payment that settles the booking, recorded in the same transaction as the status change. Read only on a change into `PAID`. A booking cannot become `PAID` while `BookingFolio.balanceDue` (computed as if the booking were not yet paid) is above zero unless this carries a payment of exactly that amount - otherwise 409. When nothing is owed it is optional and, if sent, recorded like any folio payment (and rejected the same way if it would overpay). */
             payment?: components["schemas"]["FolioPaymentInput"];
+        };
+        FutureBookingsReport: {
+            /** @description The range actually used (defaults applied). */
+            from: string;
+            to: string;
+            /** @description The statuses actually used (all of `NEW`, `CONFIRMED`, `PAID` when none were asked for). */
+            statuses: components["schemas"]["BookingStatus"][];
+            rows: components["schemas"]["FutureBookingRow"][];
+            /** @description One entry per status in `statuses`, in the order `NEW`, `CONFIRMED`, `PAID`; zero counts are listed. */
+            summary: components["schemas"]["FutureBookingsStatusSummary"][];
+        };
+        FutureBookingRow: {
+            bookingId: string;
+            guestName: string;
+            /** @description Room type of the booking's first night. */
+            roomName: string;
+            /** @description Physical room of the first night; null while none is assigned. */
+            roomUnitLabel: string | null;
+            checkIn: string;
+            checkOut: string;
+            nights: number;
+            adults: number;
+            children: number;
+            channel: components["schemas"]["BookingChannel"];
+            status: components["schemas"]["BookingStatus"];
+            /** @description Decimal(10,2) rendered as a string. Same as `Booking.totalPrice`. */
+            totalPrice: string;
+            /** @description Decimal(10,2) rendered as a string. Same as `Booking.balanceDue`. */
+            balanceDue: string;
+            notes: string | null;
+        };
+        FutureBookingsStatusSummary: {
+            status: components["schemas"]["BookingStatus"];
+            bookings: number;
+            nights: number;
+            /** @description Sum of the rows' `totalPrice`, Decimal(14,2) as a string. */
+            totalPrice: string;
         };
         /**
          * @description Contact details only - name, email, phone, staff notes, and the stay history that falls out of `Booking.guestId` (see `GuestDetail`). No documents, no nationality, no passport; adding any of those later is a purely additive migration (new nullable columns on this same row), nothing here would need to change. `email`/`phone`/`notes` are free text a staff member typed and are marked `x-sensitive` for the same reason `Booking.guestEmail`/`guestPhone`/`paymentNote` already are - `notes` in particular is exactly the kind of field that ends up carrying incidental PII ("allergic to shellfish", a complaint from a past stay), and this project already treats free-text staff commentary as sensitive by default. `name` stays unmarked, matching `Booking.guestName`'s own precedent - see `ToStringRedactsGuestPiiTests`, which only ever asserted on email/phone/paymentNote, never a name.
@@ -15158,6 +15252,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    getFutureBookingsReport: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                status?: components["schemas"]["BookingStatus"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FutureBookingsReport"];
+                };
+            };
+            /** @description A bad date, `from` after `to`, a range over 366 days, or `status=CANCELLED`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"] | components["schemas"]["ErrorMessage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenManagerPlus"];
+        };
+    };
+    exportFutureBookings: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                status?: components["schemas"]["BookingStatus"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV file. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description As `GET /reports/future-bookings`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"] | components["schemas"]["ErrorMessage"];
                 };
             };
             401: components["responses"]["Unauthorized"];

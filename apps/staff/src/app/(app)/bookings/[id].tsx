@@ -69,6 +69,7 @@ function Summary({ booking: b }: { booking: Booking }) {
       <Body muted>{`Room total ${formatBaht(b.totalPrice)} · ${b.channel.replace("_", " ").toLowerCase()}${b.externalReference ? ` · ref ${b.externalReference}` : ""}`}</Body>
       {b.guestPhone ? <Body muted>{b.guestPhone}</Body> : null}
       {b.guestEmail ? <Body muted>{b.guestEmail}</Body> : null}
+      {b.notes ? <Body>{`Notes: ${b.notes}`}</Body> : null}
       {b.paymentNote ? <Body muted>{`Payment note: ${b.paymentNote}`}</Body> : null}
       {b.cancellationReason ? <Body muted>{`Cancelled: ${b.cancellationReason}`}</Body> : null}
       {b.guestId ? <Button title="Guest card" variant="secondary" onPress={() => router.push(`/guests/${b.guestId}`)} /> : null}

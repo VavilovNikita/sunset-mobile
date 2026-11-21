@@ -4,7 +4,7 @@ type Booking = Schemas["Booking"];
 type BookingStatus = Schemas["BookingStatus"];
 type Occupancy = Schemas["OccupancyStatus"];
 
-export const STATUS_LABELS: Record<BookingStatus, string> = { NEW: "New", CONFIRMED: "Confirmed", PAID: "Paid", CANCELLED: "Cancelled" };
+export const STATUS_LABELS: Record<BookingStatus, string> = { NEW: "Tentative", CONFIRMED: "Confirmed", PAID: "Paid", CANCELLED: "Cancelled" };
 export const OCCUPANCY_LABELS: Record<Occupancy, string> = { EXPECTED: "Expected", CHECKED_IN: "In house", CHECKED_OUT: "Checked out", NO_SHOW: "No-show" };
 
 /** Same wording as the web and the night audit ("N days overdue"); the server decides who is overdue. */

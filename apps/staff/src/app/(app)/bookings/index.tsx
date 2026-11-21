@@ -48,7 +48,7 @@ function BookingsBody() {
       <Choice
         options={[
           { value: "ALL", label: "All" },
-          { value: "NEW", label: "New" },
+          { value: "NEW", label: "Tentative" },
           { value: "CONFIRMED", label: "Confirmed" },
           { value: "PAID", label: "Paid" },
           { value: "CANCELLED", label: "Cancelled" },
